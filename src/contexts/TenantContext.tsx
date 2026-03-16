@@ -75,16 +75,23 @@ const calculateDaysRemaining = (expiryDateString: string) => {
 // --- HELPER: FETCH GLOBAL SETTINGS ---
 const fetchSystemSettings = async (subscriberId: string) => {
   try {
-    const { data: settings } = await supabase
+    // 🌟 THE FIX: Changed .single() to .maybeSingle()
+    const { data: settings, error } = await supabase
       .from('system_settings')
       .select('*')
       .eq('subscriber_id', subscriberId)
-      .single();
+      .maybeSingle(); 
+
+    // If there's a legit error (not just "no rows found"), log it but don't crash
+    if (error) {
+       console.warn("System Settings Note:", error.message);
+       return null;
+    }
 
     if (settings?.theme_color) {
        document.documentElement.style.setProperty('--brand-primary', settings.theme_color);
     }
-    return settings;
+    return settings || null; // Return null if settings is undefined
   } catch (e) {
     return null;
   }
@@ -100,6 +107,26 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setActiveBranchIdState(id);
     if (id) localStorage.setItem('pronomad_active_branch', id);
     else localStorage.removeItem('pronomad_active_branch');
+  };
+
+  // Moved saveSession up so it's fully initialized before login/auth calls it
+  const saveSession = (formattedUser: any, branchId: string | null) => {
+    localStorage.setItem('pronomad_active_sub_id', formattedUser.subscriberId);
+    localStorage.setItem('pronomad_user_role', formattedUser.role);
+    localStorage.setItem('pronomad_user_name', formattedUser.fullName);
+    localStorage.setItem('pronomad_user_username', formattedUser.username);
+    localStorage.setItem('pronomad_user', JSON.stringify(formattedUser));
+
+    setUser(formattedUser);
+    setActiveBranchId(branchId);
+  };
+
+  const logout = () => {
+    localStorage.clear();
+    setUser(null);
+    setActiveBranchIdState(null);
+    setInitializing(false);
+    window.location.href = '/login';
   };
 
   useEffect(() => {
@@ -126,7 +153,7 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           return;
         }
 
-        // 🌟 THE PRO TRICK: Fetch System Settings on App Load
+        // Fetch System Settings safely
         const settings = await fetchSystemSettings(subData.id);
 
         const expiryStr = subData.subscriptionExpiresAt || subData.endDate || subData.subscription_expires_at || "";
@@ -147,7 +174,7 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           uid: subData.id, 
           email: subData.email || '',
           status: subData.status || 'active',
-          // Apply Global Settings
+          // Apply Global Settings with fallback defaults
           prefix: settings?.system_prefix || 'PN',
           currency: settings?.currency || 'GHS',
           companyLogo: settings?.company_logo || '',
@@ -187,7 +214,6 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             throw new Error("Unauthorized Application Access.");
         }
 
-        // 🌟 THE PRO TRICK: Fetch System Settings on Agent Login
         const settings = await fetchSystemSettings(staffMatch.subscriber_id || staffMatch.subscribers?.id);
 
         const bossPlan = (staffMatch.subscribers?.plan || 'basic').toLowerCase().trim();
@@ -209,7 +235,6 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             uid: staffMatch.id,
             email: staffMatch.email || '',
             status: staffMatch.status || 'active',
-            // Apply Global Settings
             prefix: settings?.system_prefix || 'PN',
             currency: settings?.currency || 'GHS',
             companyLogo: settings?.company_logo || '',
@@ -242,7 +267,6 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           .eq('subscriber_id', ceoMatch.id)
           .limit(1);
 
-        // 🌟 THE PRO TRICK: Fetch System Settings on CEO Login
         const settings = await fetchSystemSettings(ceoMatch.id);
 
         const branchId = branchData && branchData.length > 0 ? branchData[0].id : null;
@@ -263,7 +287,6 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             uid: ceoMatch.id,
             email: ceoMatch.email,
             status: ceoMatch.status || 'active',
-            // Apply Global Settings
             prefix: settings?.system_prefix || 'PN',
             currency: settings?.currency || 'GHS',
             companyLogo: settings?.company_logo || '',
@@ -279,25 +302,6 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     } catch (err: any) {
       throw new Error(err.message || "Authentication Failed");
     }
-  };
-
-  const saveSession = (formattedUser: any, branchId: string | null) => {
-    localStorage.setItem('pronomad_active_sub_id', formattedUser.subscriberId);
-    localStorage.setItem('pronomad_user_role', formattedUser.role);
-    localStorage.setItem('pronomad_user_name', formattedUser.fullName);
-    localStorage.setItem('pronomad_user_username', formattedUser.username);
-    localStorage.setItem('pronomad_user', JSON.stringify(formattedUser));
-
-    setUser(formattedUser);
-    setActiveBranchId(branchId);
-  };
-
-  const logout = () => {
-    localStorage.clear();
-    setUser(null);
-    setActiveBranchIdState(null);
-    setInitializing(false);
-    window.location.href = '/login';
   };
 
   return (

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase'; // 🌟 Added Supabase Import
 import { 
   Users, Map, ShieldCheck, ArrowUpRight, Lock, Rocket, 
-  X, CreditCard, Smartphone, Monitor, Tablet, Calendar, CheckCircle, CreditCard as CardIcon
+  X, CreditCard, Smartphone, Monitor, Tablet, Calendar, CheckCircle
 } from 'lucide-react';
 
 // --- TYPES & INTERFACES ---
@@ -42,7 +43,7 @@ declare global {
 // --- CONSTANTS ---
 
 // REPLACE WITH YOUR REAL PAYSTACK PUBLIC KEY
-const PAYSTACK_KEY = 'pk_test_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'; 
+const PAYSTACK_KEY = 'pk_live_2c3e4c090fc872a118042fb55f9932158dd89fa3'; 
 
 const PLAN_ORDER = ['Standard', 'Pro', 'Premium'];
 
@@ -85,49 +86,95 @@ const PLANS: Plan[] = [
 
 const Subscription: React.FC = () => {
   const { user } = useAuth();
+  
+  // 🌟 THE FIX: Safely extract variables to bypass TypeScript strictness
+  const targetId = (user as any)?.uid || (user as any)?.subscriberId;
+  const userEmail = (user as any)?.email; 
+
   const [subData, setSubData] = useState<SubData>({ plan: 'Standard', status: 'Active', renewal_date: new Date(), created_at: new Date() });
   const [staffCount, setStaffCount] = useState<number>(0);
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly'); 
   const [loading, setLoading] = useState<boolean>(true);
   const [selectedUpgrade, setSelectedUpgrade] = useState<SelectedUpgrade | null>(null); 
 
-  // --- 1. FETCH DATA ---
+  // --- 1. FETCH DATA (Now using Supabase!) ---
   const fetchData = async () => {
-    if (!user?.subscriberId) return;
+    if (!targetId) return;
+    setLoading(true);
+    
     try {
-      const headers = { 'x-subscriber-id': user.subscriberId };
-      const subRes = await fetch('http://localhost:3000/api/subscription', { headers });
-      const subJson = await subRes.json();
-      const staffRes = await fetch('http://localhost:3000/api/staff', { headers });
-      const staffJson = await staffRes.json();
+      // Fetch Subscription Data
+      const { data: subDataRes } = await supabase
+        .from('subscribers')
+        .select('plan, status, subscriptionExpiresAt, endDate, created_at')
+        .eq('id', targetId)
+        .maybeSingle();
 
-      if (subJson.success) setSubData(subJson.subscription);
-      if (staffJson.success) setStaffCount(staffJson.staff.length);
-    } catch (e) { console.error(e); } finally { setLoading(false); }
+      if (subDataRes) {
+         setSubData({
+             plan: subDataRes.plan || 'Standard',
+             status: subDataRes.status || 'Active',
+             renewal_date: subDataRes.subscriptionExpiresAt || subDataRes.endDate || new Date(),
+             created_at: subDataRes.created_at || new Date()
+         });
+      }
+
+      // Fetch Staff Count
+      const { count } = await supabase
+        .from('staff')
+        .select('*', { count: 'exact', head: true })
+        .eq('subscriber_id', targetId);
+
+      if (count !== null) setStaffCount(count);
+
+    } catch (e) { 
+      console.error(e); 
+    } finally { 
+      setLoading(false); 
+    }
   };
 
   useEffect(() => {
     fetchData();
-  }, [user]);
+  }, [targetId]);
 
-  // --- 2. PAYMENT HANDLER (MANUAL) ---
+  // --- 2. PAYMENT HANDLER (Now updates Supabase directly!) ---
   const handlePaymentSuccess = async (reference: string) => {
-    if (!selectedUpgrade || !user?.subscriberId) return;
+    if (!selectedUpgrade || !targetId) return;
     
     try {
-        await fetch('http://localhost:3000/api/subscription/upgrade', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-subscriber-id': user.subscriberId },
-            body: JSON.stringify({ 
-                plan: selectedUpgrade.id, 
-                billingCycle: selectedUpgrade.cycle, 
-                reference 
+        // Calculate new expiry date
+        const now = new Date();
+        const daysToAdd = selectedUpgrade.cycle === 'yearly' ? 365 : 30;
+        const newExpiry = new Date(now.setDate(now.getDate() + daysToAdd)).toISOString();
+
+        // Update the database
+        const { error } = await supabase
+            .from('subscribers')
+            .update({ 
+                plan: selectedUpgrade.id,
+                subscriptionExpiresAt: newExpiry,
+                status: 'Active'
             })
+            .eq('id', targetId);
+
+        if (error) throw error;
+
+        // Log the upgrade action
+        await supabase.from('activity_logs').insert({
+            user_id: targetId,
+            action: `Upgraded to ${selectedUpgrade.name} (${selectedUpgrade.cycle})`,
+            device_info: 'Paystack Checkout',
+            location: 'System Log'
         });
+
         setSelectedUpgrade(null);
         alert("Upgrade Successful! Welcome to your new tier.");
-        fetchData();
-    } catch (e) { alert("Upgrade failed. Please contact support."); }
+        fetchData(); // Refresh the UI with new plan info
+    } catch (e) { 
+        console.error(e);
+        alert("Payment succeeded, but we had trouble updating your account. Please contact support."); 
+    }
   };
 
   // --- 3. INITIATE UPGRADE ---
@@ -170,7 +217,7 @@ const Subscription: React.FC = () => {
                         </span>
                     </div>
                     <p className="text-slate-400 font-medium text-sm flex items-center gap-2 mb-6">
-                        <Map size={14}/> ID: <span className="font-mono text-slate-600 bg-slate-100 px-2 rounded">{user?.subscriberId}</span>
+                        <Map size={14}/> ID: <span className="font-mono text-slate-600 bg-slate-100 px-2 rounded">{targetId}</span>
                     </p>
                     <div className="grid grid-cols-2 gap-4">
                         <div>
@@ -290,11 +337,11 @@ const Subscription: React.FC = () => {
         </div>
       </div>
 
-      {/* CHECKOUT MODAL */}
-      {selectedUpgrade && user?.email && (
+      {/* 🌟 THE MODAL FIX: Using the extracted userEmail variable */}
+      {selectedUpgrade && userEmail && (
         <UpgradeModal 
             upgrade={selectedUpgrade} 
-            userEmail={user.email} 
+            userEmail={userEmail} 
             onClose={() => setSelectedUpgrade(null)}
             onSuccess={handlePaymentSuccess}
         />
@@ -369,12 +416,27 @@ interface UpgradeModalProps {
 
 const UpgradeModal: React.FC<UpgradeModalProps> = ({ upgrade, userEmail, onClose, onSuccess }) => {
     
-    // Manual Paystack Loading
+    useEffect(() => {
+        if (window.PaystackPop) return;
+
+        const script = document.createElement('script');
+        script.src = 'https://js.paystack.co/v1/inline.js';
+        script.async = true;
+        document.body.appendChild(script);
+
+        return () => {
+            if (document.body.contains(script)) {
+                document.body.removeChild(script);
+            }
+        };
+    }, []);
+
     const payWithPaystack = () => {
         if (!window.PaystackPop) {
-            alert("Paystack not loaded. Please refresh.");
+            alert("Paystack is still connecting securely. Please wait a second and click again.");
             return;
         }
+        
         const handler = window.PaystackPop.setup({
             key: PAYSTACK_KEY, 
             email: userEmail,

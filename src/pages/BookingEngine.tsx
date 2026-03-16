@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTenant } from '../contexts/TenantContext'; 
 import { supabase } from '../lib/supabase';
+
 import { useNavigate } from 'react-router-dom';
 import { 
   Send, User, Globe, Plus, Trash2, Bus, Plane, MapPin, PackagePlus, Ticket, 
@@ -351,8 +352,20 @@ const BookingEngine: React.FC = () => {
   const handleRemoveItineraryStep = (id: number) => { setNewTrip({ ...newTrip, itinerary: newTrip.itinerary.filter(step => step.id !== id) }); };
 
   return (
-    <div className="animate-fade-in pb-20 max-w-7xl mx-auto">
-      <header className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
+    <>
+      {/* ================= GLOBAL BACKGROUND LAYER ================= */}
+      {/* 1. Replace the Unsplash URL with your actual image link.
+        2. Change 'opacity-10' to opacity-20, opacity-50, etc., to control transparency.
+      */}
+      <div 
+        className="fixed inset-0 z-[-1] bg-cover bg-center bg-no-repeat opacity-50 pointer-events-none"
+          style={{ backgroundImage: `url('/mybg.jpg')` }}      
+          ></div>
+
+      {/* Added 'relative z-10 px-4 md:px-0' to keep content safely above the background */}
+      <div className="relative z-10 animate-fade-in pb-20 max-w-7xl mx-auto px-4 md:px-0 mt-6">
+        
+        <header className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <div className="flex items-center gap-3 mb-2">
             <div className="p-3 rounded-2xl shadow-sm" style={{ backgroundColor: `${APP_COLOR}20`, color: APP_COLOR }}>
@@ -871,10 +884,11 @@ const BookingEngine: React.FC = () => {
             >
               Create Another Booking
             </button>
-          </div>
+         </div>
         </div>
       )}
     </div>
+    </>
   );
 };
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import { supabase } from '../lib/supabase'; // 🌟 ADDED SUPABASE IMPORT
 import { 
   TrendingUp, Users, AlertCircle, ArrowRight, Key, Plane, CheckCircle,
   Building2, BusFront, CalendarDays, MapPin, Wallet, Activity,
@@ -29,9 +30,9 @@ interface ActivityItemProps {
 }
 
 const Dashboard: React.FC = () => {
-  const { user } = useAuth();
+  const { user } = useAuth() as any; // Cast as any to bypass strict TS rules
   const navigate = useNavigate();
-  const MY_SUBSCRIBER_ID = user?.subscriberId || "";
+  const MY_SUBSCRIBER_ID = user?.subscriberId || user?.uid || "";
 
   // --- STATE FOR REAL DATA ---
   const [stats, setStats] = useState<DashboardStats>({ 
@@ -45,24 +46,66 @@ const Dashboard: React.FC = () => {
     packageSearch: '', pax: 1, date: ''
   });
 
-  // --- FETCH LIVE DATA FROM POSTGRESQL ---
+  // --- 🌟 FETCH LIVE DATA DIRECTLY FROM SUPABASE ---
   const fetchStats = async () => {
     if (!MY_SUBSCRIBER_ID) {
       setLoading(false);
       return;
     }
+    
     setLoading(true);
+    
     try {
-      const response = await fetch('http://localhost:3000/api/dashboard/stats', {
-        headers: { 'Content-Type': 'application/json', 'x-subscriber-id': MY_SUBSCRIBER_ID }
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        setStats(data.stats);
+      // Fire all 4 database queries simultaneously for maximum speed
+      const [
+        { data: bookingsData },
+        { data: expensesData },
+        { count: staffCount },
+        { count: tripsCount }
+      ] = await Promise.all([
+        // 1. Get Revenue & Cash Flow from Bookings
+        supabase.from('bookings').select('total_cost, amount_paid').eq('subscriber_id', MY_SUBSCRIBER_ID),
+        // 2. Get Pending Expenses
+        supabase.from('expenses').select('amount').eq('subscriber_id', MY_SUBSCRIBER_ID).in('status', ['Pending', 'pending']),
+        // 3. Count Active Staff
+        supabase.from('staff').select('*', { count: 'exact', head: true }).eq('subscriber_id', MY_SUBSCRIBER_ID).neq('status', 'suspended'),
+        // 4. Count Active Trips
+        supabase.from('trips').select('*', { count: 'exact', head: true }).eq('subscriber_id', MY_SUBSCRIBER_ID).in('status', ['Active', 'active', 'Published', 'published'])
+      ]);
+
+      // Calculate totals from the returned data
+      let totalRev = 0;
+      let cash = 0;
+      let pendingExp = 0;
+
+      if (bookingsData) {
+        bookingsData.forEach((b: any) => {
+          totalRev += Number(b.total_cost || 0);
+          cash += Number(b.amount_paid || 0);
+        });
       }
-    } catch (error) { console.error("Failed to fetch live stats", error); } 
-    finally { setLoading(false); }
+
+      if (expensesData) {
+        expensesData.forEach((e: any) => {
+          pendingExp += Number(e.amount || 0);
+        });
+      }
+
+      // Update the UI
+      setStats({
+        totalRevenue: totalRev,
+        cashInHand: cash,
+        outstandingBalance: Math.max(0, totalRev - cash), // Ensure it doesn't drop below 0
+        pendingExpenses: pendingExp,
+        activeStaff: staffCount || 0,
+        activeTrips: tripsCount || 0
+      });
+
+    } catch (error) { 
+      console.error("Failed to fetch live stats from Supabase", error); 
+    } finally { 
+      setLoading(false); 
+    }
   };
 
   useEffect(() => { fetchStats(); }, [MY_SUBSCRIBER_ID]);
@@ -84,7 +127,7 @@ const Dashboard: React.FC = () => {
         
         <div className="relative z-10 p-10 md:p-16 h-full flex flex-col pt-24">
           <h1 className="text-4xl md:text-6xl font-black text-white tracking-tight mb-4 leading-tight drop-shadow-md">
-            Hey {user?.name?.split(' ')[0] || 'Team'}! What are we <br className="hidden md:block"/> 
+            Hey {user?.fullName?.split(' ')[0] || user?.name?.split(' ')[0] || 'Team'}! What are we <br className="hidden md:block"/> 
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-teal-200 to-emerald-100">Managing today?</span>
           </h1>
           <p onClick={() => window.scrollTo({ top: 500, behavior: 'smooth' })} className="text-teal-50 text-lg font-medium flex items-center gap-2 cursor-pointer hover:text-white transition-colors drop-shadow-md w-max mt-2 bg-white/10 px-4 py-2 rounded-full backdrop-blur-sm border border-white/20">
@@ -244,7 +287,7 @@ const Dashboard: React.FC = () => {
                         <p className="text-xs text-slate-400 font-medium mt-4">Your current collection rate vs billed invoices. Use the Invoicing tab to send payment reminders.</p>
                     </div>
                 ) : (
-                    <p className="text-sm text-slate-500 font-medium bg-slate-50 p-4 rounded-xl border border-slate-100">Not enough financial data to generate cash flow health. Create invoices to begin tracking your collection rate.</p>
+                    <p className="text-sm text-slate-500 font-medium bg-slate-50 p-4 rounded-xl border border-slate-100">Not enough financial data to generate cash flow health. Create bookings to begin tracking your collection rate.</p>
                 )}
             </div>
 
