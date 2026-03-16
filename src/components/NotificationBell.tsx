@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Bell, CheckCircle2, Zap, MessageSquare, Info, 
   CheckCheck, BellRing } from 'lucide-react';
-import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase'; 
 
 interface Notification {
@@ -14,7 +14,7 @@ interface Notification {
 }
 
 const NotificationBell: React.FC = () => {
-  const { user } = useAuth();
+  const { user } = useTenant();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);

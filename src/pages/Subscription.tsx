@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase'; // 🌟 Added Supabase Import
 import { 
   Users, Map, ShieldCheck, ArrowUpRight, Lock, Rocket, 
@@ -85,7 +85,7 @@ const PLANS: Plan[] = [
 ];
 
 const Subscription: React.FC = () => {
-  const { user } = useAuth();
+  const { user } = useTenant();
   
   // 🌟 THE FIX: Safely extract variables to bypass TypeScript strictness
   const targetId = (user as any)?.uid || (user as any)?.subscriberId;
@@ -211,7 +211,7 @@ const Subscription: React.FC = () => {
                 </div>
                 <div className="flex-1">
                     <div className="flex items-center justify-between mb-1">
-                        <h2 className="text-3xl font-black text-slate-900 tracking-tight">{user?.name || 'My Agency'}</h2>
+                        <h2 className="text-3xl font-black text-slate-900 tracking-tight">{user?.fullName || 'My Agency'}</h2>
                         <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${subData.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                             {subData.status}
                         </span>

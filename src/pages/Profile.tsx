@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
 import { 
   UserCircle, Key, Shield, Save, CheckCircle, 
@@ -38,7 +38,7 @@ interface AuditLog {
 }
 
 const Profile: React.FC = () => {
-  const { user, activeBranchId } = useAuth() as any;
+  const { user, activeBranchId } = useTenant() as any;
   
   // --- STATES ---
   const [profileData, setProfileData] = useState<UserProfile | null>(null);

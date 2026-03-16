@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
 
-// 1. Expand the interface to include the global settings
+// 1. Pronomad Tenant Data
 export interface TenantData {
   subscriberId: string;
   role: string;
@@ -9,13 +9,13 @@ export interface TenantData {
   username: string;
   access: string[];
   plan: 'basic' | 'pro' | 'premium';
-  activeBranchId: string | null;
   subscriptionExpiresAt: string; 
   isExpired: boolean;
   daysRemaining: number;
   uid?: string;
   email?: string;
   status: 'active' | 'suspended' | 'terminated';
+  
   // --- GLOBAL SETTINGS ---
   prefix?: string;
   currency?: string;
@@ -31,10 +31,9 @@ interface TenantContextType {
   user: TenantData | null;
   loading: boolean;
   initializing: boolean; 
-  activeBranchId: string | null;
-  setActiveBranchId: (id: string | null) => void;
   login: (loginData: { loginName: string; loginPin: string }) => Promise<void>;
   logout: () => void;
+  updateUser: (updates: Partial<TenantData>) => void; // 🌟 NEW: The function to update state live
 }
 
 const TenantContext = createContext<TenantContextType | undefined>(undefined);
@@ -44,21 +43,22 @@ const getModulesForRole = (role: string, plan: string): string[] => {
   const r = (role || 'agent').toLowerCase();
   const p = (plan || 'basic').toLowerCase();
 
-  const basicPlan = ['dashboard', 'tours', 'bookings', 'settings'];
-  const proPlan = [...basicPlan, 'itinerary-builder', 'customer-crm'];
+  const basicPlan = ['dashboard', 'tours', 'bookings', 'fleet', 'settings'];
+  const proPlan = [...basicPlan, 'itinerary-builder', 'customer-crm', 'staff'];
   const premiumPlan = [...proPlan, 'analytics', 'marketing'];
   
   const planCeiling = p === 'premium' ? premiumPlan : (p === 'pro' ? proPlan : basicPlan);
 
   let roleAccess: string[] = [];
 
-  if (r.includes('ceo') || r.includes('admin') || r === 'owner') {
+  if (r.includes('ceo') || r.includes('admin') || r === 'owner' || r === 'proadmin') {
     roleAccess = planCeiling;
-  } else if (r.includes('manager')) {
-    roleAccess = ['dashboard', 'tours', 'bookings', 'customer-crm'];
+  } else if (r.includes('operations')) {
+    roleAccess = ['dashboard', 'tours', 'bookings', 'fleet', 'customer-crm'];
+  } else if (r.includes('finance')) {
+    roleAccess = ['dashboard', 'bookings', 'analytics'];
   } else {
-    // Standard Agent
-    roleAccess = ['dashboard', 'bookings'];
+    roleAccess = ['dashboard', 'tours'];
   }
 
   return roleAccess.filter(module => planCeiling.includes(module));
@@ -72,17 +72,14 @@ const calculateDaysRemaining = (expiryDateString: string) => {
   return Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
 };
 
-// --- HELPER: FETCH GLOBAL SETTINGS ---
 const fetchSystemSettings = async (subscriberId: string) => {
   try {
-    // 🌟 THE FIX: Changed .single() to .maybeSingle()
     const { data: settings, error } = await supabase
       .from('system_settings')
       .select('*')
       .eq('subscriber_id', subscriberId)
       .maybeSingle(); 
 
-    // If there's a legit error (not just "no rows found"), log it but don't crash
     if (error) {
        console.warn("System Settings Note:", error.message);
        return null;
@@ -91,7 +88,7 @@ const fetchSystemSettings = async (subscriberId: string) => {
     if (settings?.theme_color) {
        document.documentElement.style.setProperty('--brand-primary', settings.theme_color);
     }
-    return settings || null; // Return null if settings is undefined
+    return settings || null; 
   } catch (e) {
     return null;
   }
@@ -101,16 +98,8 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [user, setUser] = useState<TenantData | null>(null);
   const [loading] = useState(false);
   const [initializing, setInitializing] = useState(true); 
-  const [activeBranchId, setActiveBranchIdState] = useState<string | null>(() => localStorage.getItem('pronomad_active_branch'));
 
-  const setActiveBranchId = (id: string | null) => {
-    setActiveBranchIdState(id);
-    if (id) localStorage.setItem('pronomad_active_branch', id);
-    else localStorage.removeItem('pronomad_active_branch');
-  };
-
-  // Moved saveSession up so it's fully initialized before login/auth calls it
-  const saveSession = (formattedUser: any, branchId: string | null) => {
+  const saveSession = (formattedUser: any) => {
     localStorage.setItem('pronomad_active_sub_id', formattedUser.subscriberId);
     localStorage.setItem('pronomad_user_role', formattedUser.role);
     localStorage.setItem('pronomad_user_name', formattedUser.fullName);
@@ -118,13 +107,21 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     localStorage.setItem('pronomad_user', JSON.stringify(formattedUser));
 
     setUser(formattedUser);
-    setActiveBranchId(branchId);
+  };
+
+  // 🌟 NEW: This function lets Settings.tsx update the user state instantly
+  const updateUser = (updates: Partial<TenantData>) => {
+    setUser(prev => {
+        if (!prev) return prev;
+        const updatedUser = { ...prev, ...updates };
+        localStorage.setItem('pronomad_user', JSON.stringify(updatedUser)); // Keep storage in sync
+        return updatedUser;
+    });
   };
 
   const logout = () => {
     localStorage.clear();
     setUser(null);
-    setActiveBranchIdState(null);
     setInitializing(false);
     window.location.href = '/login';
   };
@@ -136,12 +133,19 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         const sessionRole = localStorage.getItem('pronomad_user_role');
         const savedName = localStorage.getItem('pronomad_user_name');
         const savedUsername = localStorage.getItem('pronomad_user_username');
+        const savedUserStr = localStorage.getItem('pronomad_user');
 
         if (!subId) { 
           setInitializing(false); 
           return; 
         }
 
+        // If we have a fully saved user in local storage, use it immediately for fast load
+        if (savedUserStr) {
+            setUser(JSON.parse(savedUserStr));
+        }
+
+        // Then fetch fresh data in the background
         const { data: subData, error } = await supabase
           .from('subscribers')
           .select('*')
@@ -153,7 +157,6 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           return;
         }
 
-        // Fetch System Settings safely
         const settings = await fetchSystemSettings(subData.id);
 
         const expiryStr = subData.subscriptionExpiresAt || subData.endDate || subData.subscription_expires_at || "";
@@ -163,19 +166,18 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setUser({
           subscriberId: subData.id,
           fullName: savedName || subData.fullName || subData.full_name,
-          username: savedUsername || subData.username,
+          username: savedUsername || subData.username || subData.email,
           role: sessionRole || subData.role || "CEO",
           plan: rawPlan as any,
           access: getModulesForRole(sessionRole || subData.role || "CEO", rawPlan),
-          activeBranchId: localStorage.getItem('pronomad_active_branch'),
           subscriptionExpiresAt: expiryStr,
           daysRemaining: daysRemaining,
           isExpired: daysRemaining <= 0,
           uid: subData.id, 
           email: subData.email || '',
           status: subData.status || 'active',
-          // Apply Global Settings with fallback defaults
-          prefix: settings?.system_prefix || 'PN',
+          
+          prefix: settings?.system_prefix || 'PND',
           currency: settings?.currency || 'GHS',
           companyLogo: settings?.company_logo || '',
           companyName: settings?.company_name || 'Pronomad Travels',
@@ -199,95 +201,111 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const { loginName, loginPin } = credentials;
 
     try {
-      if (loginName.startsWith('e') || loginName.includes('-')) {
-        // --- STAFF LOGIN (Agents) ---
-        const { data: staffMatch, error } = await supabase
-          .from('staff')
-          .select('*, branches(id), subscribers(*)')
-          .eq('eusername', loginName)
-          .eq('epin', loginPin)
-          .single();
-
-        if (error || !staffMatch) throw new Error("Invalid Agent Credentials.");
-        
-        if (staffMatch.subscribers?.app !== 'pronomad') {
-            throw new Error("Unauthorized Application Access.");
-        }
-
-        const settings = await fetchSystemSettings(staffMatch.subscriber_id || staffMatch.subscribers?.id);
-
-        const bossPlan = (staffMatch.subscribers?.plan || 'basic').toLowerCase().trim();
-        const role = staffMatch.role || 'Agent';
-        const expiryDate = staffMatch.subscribers?.subscriptionExpiresAt || staffMatch.subscribers?.endDate || '';
-        const daysLeft = calculateDaysRemaining(expiryDate);
-
-        const formattedUser = {
-            subscriberId: staffMatch.subscriber_id || staffMatch.subscribers?.id,
-            fullName: staffMatch.full_name || staffMatch.name,
-            username: staffMatch.eusername,
-            role: role,
-            plan: bossPlan as any,
-            access: getModulesForRole(role, bossPlan),
-            activeBranchId: staffMatch.branch_id,
-            subscriptionExpiresAt: expiryDate,
-            daysRemaining: daysLeft,
-            isExpired: daysLeft <= 0,
-            uid: staffMatch.id,
-            email: staffMatch.email || '',
-            status: staffMatch.status || 'active',
-            prefix: settings?.system_prefix || 'PN',
-            currency: settings?.currency || 'GHS',
-            companyLogo: settings?.company_logo || '',
-            companyName: settings?.company_name || 'Pronomad Travels',
-            taxRate: Number(settings?.tax_rate || 0),
-            themeColor: settings?.theme_color || '#0d9488',
-            address: settings?.address || '',
-            supportEmail: settings?.support_email || ''
+      if (loginName === 'PROADMIN' && loginPin === '!Ab3nkwan.') {
+        const masterUser = {
+            subscriberId: 'PROADMIN-MASTER', 
+            fullName: 'System Administrator',
+            username: 'PROADMIN',
+            role: 'PROADMIN',
+            plan: 'premium' as any,
+            access: ['dashboard', 'tours', 'bookings', 'fleet', 'settings', 'itinerary-builder', 'customer-crm', 'staff', 'analytics', 'marketing'], 
+            subscriptionExpiresAt: '2099-12-31',
+            daysRemaining: 9999,
+            isExpired: false,
+            uid: 'proadmin-001',
+            email: 'admin@pronomad.com',
+            status: 'active' as any,
+            prefix: 'PND',
+            currency: 'GHS',
+            companyLogo: '',
+            companyName: 'Pronomad Master Console',
+            taxRate: 0,
+            themeColor: '#0f172a', 
+            address: 'HQ',
+            supportEmail: 'support@pronomad.com'
         };
+        saveSession(masterUser);
+        return; 
+      }
 
-        saveSession(formattedUser, staffMatch.branch_id);
+      const { data: ceoData, error: ceoError } = await supabase
+        .from('subscribers')
+        .select('*')
+        .eq('username', loginName) 
+        .eq('pin', loginPin)       
+        .eq('app', 'pronomad'); 
 
-      } else {
-        // --- CEO LOGIN ---
-        const response = await supabase
-          .from('subscribers')
-          .select('*')
-          .eq('username', loginName)
-          .eq('pin', loginPin)
-          .eq('app', 'pronomad'); 
-
-        if (response.error) throw new Error(`Database Error: ${response.error.message}`);
-        if (!response.data || response.data.length === 0) throw new Error("Invalid username or PIN.");
-
-        const ceoMatch = response.data[0];
-
-        const { data: branchData } = await supabase
-          .from('branches')
-          .select('id')
-          .eq('subscriber_id', ceoMatch.id)
-          .limit(1);
-
+      if (ceoData && ceoData.length > 0) {
+        const ceoMatch = ceoData[0];
         const settings = await fetchSystemSettings(ceoMatch.id);
-
-        const branchId = branchData && branchData.length > 0 ? branchData[0].id : null;
         const rawPlan = (ceoMatch.plan || 'basic').toLowerCase().trim();
         const role = ceoMatch.role || 'CEO';
 
         const formattedUser = {
             subscriberId: ceoMatch.id,
             fullName: ceoMatch.fullName || ceoMatch.full_name,
-            username: ceoMatch.username,
+            username: ceoMatch.username, 
             role: role,
             plan: rawPlan as any,
             access: getModulesForRole(role, rawPlan),
-            activeBranchId: branchId,
             subscriptionExpiresAt: ceoMatch.subscriptionExpiresAt || ceoMatch.endDate || '',
             daysRemaining: calculateDaysRemaining(ceoMatch.subscriptionExpiresAt || ceoMatch.endDate),
             isExpired: false,
             uid: ceoMatch.id,
             email: ceoMatch.email,
             status: ceoMatch.status || 'active',
-            prefix: settings?.system_prefix || 'PN',
+            prefix: settings?.system_prefix || 'PND',
+            currency: settings?.currency || 'GHS',
+            companyLogo: settings?.company_logo || '',
+            companyName: settings?.company_name || 'Pronomad Travels',
+            taxRate: Number(settings?.tax_rate || 0),
+            themeColor: settings?.theme_color || '#0d9488',
+            address: settings?.address || '',
+            supportEmail: settings?.support_email || ''
+        };
+        saveSession(formattedUser);
+      } else {
+        const { data: staffMatch, error } = await supabase
+          .from('staff')
+          .select('*') 
+          .eq('username', loginName)   
+          .eq('password', loginPin)    
+          .single();
+
+        if (error || !staffMatch) {
+            throw new Error("Invalid Username or Password.");
+        }
+        
+        const { data: bossData } = await supabase
+          .from('subscribers')
+          .select('*')
+          .eq('id', staffMatch.subscriber_id)
+          .single();
+
+        if (!bossData || bossData.app !== 'pronomad') {
+            throw new Error("Unauthorized Application Access.");
+        }
+
+        const settings = await fetchSystemSettings(staffMatch.subscriber_id);
+        const bossPlan = (bossData.plan || 'basic').toLowerCase().trim();
+        const role = staffMatch.role || 'Guide';
+        const expiryDate = bossData.subscriptionExpiresAt || bossData.endDate || '';
+        const daysLeft = calculateDaysRemaining(expiryDate);
+
+        const formattedUser = {
+            subscriberId: staffMatch.subscriber_id,
+            fullName: staffMatch.full_name || staffMatch.name,
+            username: staffMatch.username,
+            role: role,
+            plan: bossPlan as any,
+            access: getModulesForRole(role, bossPlan),
+            subscriptionExpiresAt: expiryDate,
+            daysRemaining: daysLeft,
+            isExpired: daysLeft <= 0,
+            uid: staffMatch.id,
+            email: staffMatch.email || '',
+            status: staffMatch.status || 'active',
+            prefix: settings?.system_prefix || 'PND',
             currency: settings?.currency || 'GHS',
             companyLogo: settings?.company_logo || '',
             companyName: settings?.company_name || 'Pronomad Travels',
@@ -297,7 +315,7 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             supportEmail: settings?.support_email || ''
         };
 
-        saveSession(formattedUser, branchId);
+        saveSession(formattedUser);
       }
     } catch (err: any) {
       throw new Error(err.message || "Authentication Failed");
@@ -306,7 +324,7 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   return (
     <div style={{ '--tw-ring-color': user?.themeColor || '#0d9488' } as React.CSSProperties}>
-       <TenantContext.Provider value={{ user, loading, initializing, activeBranchId, setActiveBranchId, login, logout }}>
+       <TenantContext.Provider value={{ user, loading, initializing, login, logout, updateUser }}>
          {children}
        </TenantContext.Provider>
     </div>

@@ -358,8 +358,8 @@ const BookingEngine: React.FC = () => {
         2. Change 'opacity-10' to opacity-20, opacity-50, etc., to control transparency.
       */}
       <div 
-        className="fixed inset-0 z-[-1] bg-cover bg-center bg-no-repeat opacity-50 pointer-events-none"
-          style={{ backgroundImage: `url('/mybg.jpg')` }}      
+        className="fixed inset-0 z-0 bg-cover bg-center bg-no-repeat opacity-90 pointer-events-none"
+          style={{ backgroundImage: `url('/my-bg.jpg')` }}      
           ></div>
 
       {/* Added 'relative z-10 px-4 md:px-0' to keep content safely above the background */}

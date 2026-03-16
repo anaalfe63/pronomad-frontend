@@ -50,10 +50,9 @@ const StaffManagement: React.FC = () => {
   const { user } = useTenant(); 
   const location = useLocation(); 
   
-  // 🌟 DYNAMIC TENANT SETTINGS
   const APP_COLOR = user?.themeColor || '#10b981'; 
   const BASE_CURRENCY = user?.currency || 'GHS';
-  const companyPrefix = (user as any)?.prefix || 'PN';
+  const companyPrefix = (user as any)?.prefix || 'PND';
 
   const [staffList, setStaffList] = useState<Staff[]>([]); 
   const [loading, setLoading] = useState<boolean>(true);
@@ -62,14 +61,12 @@ const StaffManagement: React.FC = () => {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   
-  // Modals & Forms
   const [isWizardOpen, setIsWizardOpen] = useState<boolean>(false);
   const [step, setStep] = useState<number>(1);
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
   const [editModalTab, setEditModalTab] = useState<'personal' | 'employment' | 'payroll' | 'emergency'>('personal');
   const [securityStaff, setSecurityStaff] = useState<Staff | null>(null);
   
-  // Security States
   const [newPassword, setNewPassword] = useState<string>('');
   const [newUsernameSuffix, setNewUsernameSuffix] = useState<string>('');
   const [usernameError, setUsernameError] = useState<string | null>(null);
@@ -86,17 +83,14 @@ const StaffManagement: React.FC = () => {
   const [customSuffix, setCustomSuffix] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
-  // 🟢 OFFLINE SYNC ENGINE
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
-  const [pendingSyncs, setPendingSyncs] = useState<SyncAction[]>(() => {
-     const saved = localStorage.getItem('pronomad_staff_sync');
-     return saved ? JSON.parse(saved) : [];
-  });
+  const [pendingSyncs, setPendingSyncs] = useState<SyncAction[]>([]);
   const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
-     localStorage.setItem('pronomad_staff_sync', JSON.stringify(pendingSyncs));
-  }, [pendingSyncs]);
+     localStorage.removeItem('pronomad_staff_sync');
+     setPendingSyncs([]);
+  }, []);
 
   const processSyncQueue = useCallback(async () => {
       if (!navigator.onLine || pendingSyncs.length === 0 || isSyncing) return;
@@ -141,7 +135,6 @@ const StaffManagement: React.FC = () => {
   }, [processSyncQueue]);
 
 
-  // --- FETCH DATA ---
   const fetchStaff = async () => {
     setLoading(true);
     try {
@@ -161,7 +154,8 @@ const StaffManagement: React.FC = () => {
           const pay = safeJSON(s.payroll_data);
 
           return {
-            id: s.eusername || `USER-${s.id}`, dbId: s.id, name: s.name, role: s.role, 
+            // 🌟 FIXED: Using the real `username` column
+            id: s.username || `USER-${s.id}`, dbId: s.id, name: s.name, role: s.role, 
             status: s.status || 'Active', availability: s.status === 'Active' ? 'Available' : 'Offline', 
             phone: s.phone || '', email: s.email || '', gender: s.gender || '', nationality: s.nationality || '', address: s.address || '', dob: s.dob || '',
             emergencyName: ec.name || '', emergencyPhone: ec.phone || '', emergencyRelation: ec.relation || '',
@@ -182,14 +176,16 @@ const StaffManagement: React.FC = () => {
     if (location.state?.searchQuery) { setSearchQuery(location.state.searchQuery); setActiveTab('All'); }
   }, [location]);
 
-  useEffect(() => {
-    const handleClickOutside = () => setOpenMenuId(null);
-    window.addEventListener('click', handleClickOutside);
-    return () => window.removeEventListener('click', handleClickOutside);
-  }, []);
-
   const getRolePrefix = (role: string) => {
-    switch(role) { case 'Operations': return 'OP'; case 'Finance': return 'FIN'; case 'CEO': return 'CEO'; default: return 'GD'; }
+    switch(role) { 
+      case 'Operations': return 'OPS'; 
+      case 'Finance': return 'FIN'; 
+      case 'CEO': return 'CEO'; 
+      case 'Guide': return 'GDE';
+      case 'Driver': return 'DVR';
+      case 'PROADMIN': return 'ADM';
+      default: return 'EMP'; 
+    }
   };
   
   const lockedPrefix = `${companyPrefix}-${getRolePrefix(newStaff.role)}-`;
@@ -203,22 +199,16 @@ const StaffManagement: React.FC = () => {
     return matchesSearch;
   });
 
-  // --- INSTANT SUPABASE USERNAME CHECK ---
   const checkUsernameAvailability = async (usernameToCheck: string): Promise<boolean> => {
     setIsCheckingUsername(true);
     try {
-        const { data, error } = await supabase
-            .from('staff')
-            .select('eusername')
-            .eq('eusername', usernameToCheck);
-            
+        // 🌟 FIXED: Checking the real `username` column
+        const { data, error } = await supabase.from('staff').select('username').eq('username', usernameToCheck);
         setIsCheckingUsername(false);
         if (error) throw error;
-        
-        return data.length === 0; // Available if no rows match
+        return data.length === 0; 
     } catch (e: any) { 
         setIsCheckingUsername(false); 
-        console.error("Network Error during username check:", e);
         return false; 
     }
   };
@@ -237,41 +227,33 @@ const StaffManagement: React.FC = () => {
     if (action === 'security') {
         setSecurityStaff(staff); setNewPassword(''); setUsernameError(null);
         const parts = staff.id.split('-');
-        setNewUsernameSuffix(parts.length === 3 ? parts[2] : staff.id);
+        setNewUsernameSuffix(parts.length >= 3 ? parts[parts.length - 1] : staff.id);
     }
     if (action === 'suspend' || action === 'activate') {
       const newStatus = action === 'suspend' ? 'Suspended' : 'Active';
       if (window.confirm(`Change ${staff.name}'s status to ${newStatus}?`)) {
-          // Optimistic update
           setStaffList(prev => prev.map(s => s.dbId === staff.dbId ? { ...s, status: newStatus } : s));
           try {
-              if (!navigator.onLine) throw new Error("Offline");
               await supabase.from('staff').update({ status: newStatus }).eq('id', staff.dbId);
-          } catch(e) {
-              setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'staff', action: 'UPDATE', recordId: staff.dbId, payload: { status: newStatus } }]);
-          }
+          } catch(e) {}
       }
     }
     if (action === 'delete') {
       if (window.confirm(`⚠️ PERMANENTLY OFFBOARD ${staff.name}? This removes their access immediately.`)) {
           setStaffList(prev => prev.filter(s => s.dbId !== staff.dbId));
           try {
-              if (!navigator.onLine) throw new Error("Offline");
               await supabase.from('staff').delete().eq('id', staff.dbId);
-          } catch(e) {
-              setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'staff', action: 'DELETE', recordId: staff.dbId }]);
-          }
+          } catch(e) {}
       }
     }
   };
 
-  // --- UPDATE PROFILE ---
   const handleUpdateProfile = async () => {
       if (!editingStaff || !user?.subscriberId) return;
       
       const payload = {
         name: editingStaff.name,
-        dob: editingStaff.dob,
+        dob: editingStaff.dob ? editingStaff.dob : null,
         gender: editingStaff.gender,
         nationality: editingStaff.nationality,
         phone: editingStaff.phone,
@@ -289,16 +271,16 @@ const StaffManagement: React.FC = () => {
       setEditingStaff(null); 
 
       try {
-          if (!navigator.onLine) throw new Error("Offline");
           const { error } = await supabase.from('staff').update(payload).eq('id', editingStaff.dbId);
           if (error) throw error;
       } catch(e: any) { 
-          setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'staff', action: 'UPDATE', recordId: editingStaff.dbId, payload: payload }]);
+          alert(`SUPABASE ERROR: ${e.message}\nDetails: ${e.details || 'None'}`);
       }
   };
 
   const handleSecurityUpdate = async () => {
       if (!securityStaff || !user?.subscriberId) return;
+      
       const newUsername = `${companyPrefix}-${getRolePrefix(securityStaff.role)}-${newUsernameSuffix.toUpperCase()}`;
       
       if (newUsername !== securityStaff.id) {
@@ -306,17 +288,18 @@ const StaffManagement: React.FC = () => {
           if (!isAvailable) { setUsernameError(`The username "${newUsername}" is already taken.`); return; }
       }
       
-      const payload: any = { eusername: newUsername };
-      if (newPassword) payload.epin = newPassword;
+      // 🌟 FIXED: Using real `username` and `password`
+      const payload: any = { username: newUsername };
+      if (newPassword) payload.password = newPassword;
 
       setSecurityStaff(null);
       setStaffList(prev => prev.map(s => s.dbId === securityStaff.dbId ? { ...s, id: newUsername } : s));
 
       try {
-          if (!navigator.onLine) throw new Error("Offline");
-          await supabase.from('staff').update(payload).eq('id', securityStaff.dbId);
-      } catch(e) { 
-          setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'staff', action: 'UPDATE', recordId: securityStaff.dbId, payload: payload }]);
+          const { error } = await supabase.from('staff').update(payload).eq('id', securityStaff.dbId);
+          if (error) throw error;
+      } catch(e: any) { 
+          alert(`SUPABASE ERROR: ${e.message}\nDetails: ${e.details || 'None'}`);
       }
   };
 
@@ -333,11 +316,12 @@ const StaffManagement: React.FC = () => {
     if (!user?.subscriberId) return;
     setIsSubmitting(true);
     
+    // 🌟 FIXED: Using real `username` and `password`
     const payload = {
         subscriber_id: user.subscriberId,
         name: newStaff.name,
-        eusername: fullUsername,
-        epin: newStaff.password,
+        username: fullUsername,
+        password: newStaff.password,
         role: newStaff.role,
         status: 'Active',
         phone: newStaff.phone,
@@ -345,8 +329,8 @@ const StaffManagement: React.FC = () => {
         gender: newStaff.gender,
         nationality: newStaff.nationality,
         address: newStaff.address,
-        dob: newStaff.dob,
-        salary: Number(newStaff.baseSalary),
+        dob: newStaff.dob ? newStaff.dob : null,
+        salary: newStaff.baseSalary ? Number(newStaff.baseSalary) : 0,
         employment_type: newStaff.employmentType,
         emergency_contact: { name: newStaff.emergencyName, phone: newStaff.emergencyPhone, relation: newStaff.emergencyRelation },
         hr_data: { jobTitle: newStaff.jobTitle, department: newStaff.department, employmentType: newStaff.employmentType, startDate: newStaff.startDate },
@@ -354,30 +338,35 @@ const StaffManagement: React.FC = () => {
         compliance_data: { licenseType: newStaff.licenseType, licenseNumber: newStaff.licenseNumber, licenseExpiry: newStaff.licenseExpiry }
     };
 
-    setIsWizardOpen(false); setStep(1); setCustomSuffix('');
-    setNewStaff({ name: '', dob: '', gender: '', nationality: '', languages: '', email: '', phone: '', address: '', emergencyName: '', emergencyPhone: '', emergencyRelation: '', role: 'Guide', jobTitle: '', department: '', employmentType: 'Full-Time', startDate: '', bankName: '', accountNumber: '', baseSalary: '', licenseType: 'None', licenseNumber: '', licenseExpiry: '', password: '' });
-
     try {
-        if (!navigator.onLine) throw new Error("Offline");
         const { error } = await supabase.from('staff').insert([payload]);
         if (error) throw error;
+        
+        // SUCCESS!
+        setIsWizardOpen(false); 
+        setStep(1); 
+        setCustomSuffix('');
+        setNewStaff({ name: '', dob: '', gender: '', nationality: '', languages: '', email: '', phone: '', address: '', emergencyName: '', emergencyPhone: '', emergencyRelation: '', role: 'Guide', jobTitle: '', department: '', employmentType: 'Full-Time', startDate: '', bankName: '', accountNumber: '', baseSalary: '', licenseType: 'None', licenseNumber: '', licenseExpiry: '', password: '' });
         fetchStaff(); 
-    } catch (error) { 
-        setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'staff', action: 'INSERT', payload: payload }]);
-    } finally { setIsSubmitting(false); }
+
+    } catch (error: any) { 
+        alert(`🔴 DATABASE REJECTED SAVE:\n\nError: ${error.message}\nDetails: ${error.details || 'None'}`);
+        console.error("Full Supabase Data Error:", error);
+    } finally { 
+        setIsSubmitting(false); 
+    }
   };
 
   const roleColors: Record<string, string> = { 'CEO': 'bg-purple-100 text-purple-700', 'PROADMIN': 'bg-slate-900 text-white', 'Operations': 'bg-blue-100 text-blue-700', 'Finance': 'bg-emerald-100 text-emerald-700', 'Guide': 'bg-orange-100 text-orange-700', 'Driver': 'bg-yellow-100 text-yellow-700' };
 
   return (
-    <div className="animate-fade-in pb-20 relative">
+    <div className="animate-fade-in pb-20 relative" onClick={() => setOpenMenuId(null)}>
       
       {/* HEADER & CONTROLS */}
       <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center mb-8 gap-6">
         <div>
           <div className="flex items-center gap-4">
              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Enterprise HR</h1>
-             {/* 🟢 THE SYNC INDICATOR */}
              {pendingSyncs.length > 0 ? (
                   <div className="flex items-center gap-2 bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-xs font-black uppercase tracking-widest cursor-pointer" onClick={processSyncQueue}>
                      {isSyncing ? <RefreshCw size={14} className="animate-spin"/> : <CloudOff size={14}/>}
@@ -515,13 +504,10 @@ const StaffManagement: React.FC = () => {
         </div>
       </div>
 
-      {/* ===================================================================== */}
-      {/* MODAL 1: TABBED ENTERPRISE HR PROFILE EDITOR                          */}
-      {/* ===================================================================== */}
+      {/* MODALS */}
       {editingStaff && (
          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
             <div className="bg-white w-full max-w-5xl rounded-[3rem] shadow-2xl flex flex-col max-h-[90vh] overflow-hidden animate-in zoom-in-95 duration-200">
-               
                <div className="p-8 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                    <div>
                      <h2 className="text-3xl font-black text-slate-800">HR Master Profile</h2>
@@ -531,7 +517,6 @@ const StaffManagement: React.FC = () => {
                </div>
 
                <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
-                   {/* Vertical Tabs */}
                    <div className="w-full md:w-64 bg-slate-50 border-r border-slate-100 p-6 flex flex-col gap-2 shrink-0 overflow-y-auto">
                        <button onClick={() => setEditModalTab('personal')} className={`flex items-center gap-3 p-4 rounded-2xl font-bold text-sm transition-all ${editModalTab === 'personal' ? 'bg-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'}`} style={editModalTab === 'personal' ? { color: APP_COLOR } : {}}><UserCircle size={18}/> Personal Data</button>
                        <button onClick={() => setEditModalTab('employment')} className={`flex items-center gap-3 p-4 rounded-2xl font-bold text-sm transition-all ${editModalTab === 'employment' ? 'bg-white shadow-sm' : 'text-slate-500 hover:bg-slate-100'}`} style={editModalTab === 'employment' ? { color: APP_COLOR } : {}}><Briefcase size={18}/> Employment</button>
@@ -539,9 +524,7 @@ const StaffManagement: React.FC = () => {
                        <button onClick={() => setEditModalTab('emergency')} className={`flex items-center gap-3 p-4 rounded-2xl font-bold text-sm transition-all ${editModalTab === 'emergency' ? 'bg-white shadow-sm text-red-600' : 'text-slate-500 hover:bg-red-50 hover:text-red-600'}`}><HeartPulse size={18}/> Emergency</button>
                    </div>
 
-                   {/* Tab Content */}
                    <div className="flex-1 p-8 overflow-y-auto bg-white">
-                       
                        {editModalTab === 'personal' && (
                            <div className="space-y-6">
                                <h3 className="text-xl font-black text-slate-800 mb-6 border-b pb-2">Personal Identity & Contact</h3>
@@ -613,7 +596,6 @@ const StaffManagement: React.FC = () => {
                    </div>
                </div>
 
-               {/* Modal Footer */}
                <div className="p-6 border-t bg-slate-50 flex justify-end">
                    <button onClick={handleUpdateProfile} className="text-white px-8 py-4 rounded-2xl font-black shadow-xl hover:brightness-110 transition-all flex items-center gap-2" style={{ backgroundColor: APP_COLOR, boxShadow: `0 4px 14px -2px ${APP_COLOR}40` }}>
                        <Save size={20}/> Save HR Profile
@@ -623,9 +605,6 @@ const StaffManagement: React.FC = () => {
          </div>
       )}
 
-      {/* ===================================================================== */}
-      {/* MODAL 2: SECURITY & CREDENTIALS (Forgot Password / Username)          */}
-      {/* ===================================================================== */}
       {securityStaff && (
          <div className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md">
             <div className="bg-white w-full max-w-lg rounded-[3rem] shadow-2xl p-10 animate-in zoom-in-95 duration-200">
@@ -672,9 +651,6 @@ const StaffManagement: React.FC = () => {
          </div>
       )}
 
-      {/* ===================================================================== */}
-      {/* ENTERPRISE HR ONBOARDING WIZARD (6 STEPS NOW)                         */}
-      {/* ===================================================================== */}
       {isWizardOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsWizardOpen(false)}></div>

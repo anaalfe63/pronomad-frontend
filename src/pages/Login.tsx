@@ -29,7 +29,7 @@ const Login: React.FC = () => {
             loginPin: formData.password
         });
         
-        // 🟢 THE FIX: Force the old AuthContext to wake up and read the new tokens
+        // 🟢 THE FIX: Force the old TenantContext to wake up and read the new tokens
         window.location.href = '/'; 
     } catch (err: any) {
         setError(err.message || 'Invalid credentials');

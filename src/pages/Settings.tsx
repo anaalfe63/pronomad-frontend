@@ -20,19 +20,15 @@ interface SystemSettings {
   system_prefix: string;
   theme_color: string;
   date_format: string;
-  // NEW: Localization & Units
   time_format: string;
   timezone: string;
   distance_unit: string;
-  // NEW: Invoicing
   invoice_prefix: string;
   receipt_footer_note: string;
-  // Operations & Automations
   default_deposit_pct: number;
   auto_send_receipts: boolean;
   enable_smartyield_ai: boolean;
   sms_notifications: boolean;
-  // Security & Access
   session_timeout_mins: number;
   require_staff_mfa: boolean;
   restrict_ip_access: boolean;
@@ -61,7 +57,7 @@ const TIMEZONES = [
 ];
 
 const Settings: React.FC = () => {
-  const { user } = useTenant();
+  const { user, updateUser } = useTenant(); // 🌟 We are pulling updateUser here
   const APP_COLOR = user?.themeColor || '#10b981';
 
   const [isSaving, setIsSaving] = useState<boolean>(false);
@@ -152,6 +148,9 @@ const Settings: React.FC = () => {
 
   const handleToggle = (field: keyof SystemSettings) => { setSettings(prev => ({ ...prev, [field]: !prev[field] as any })); };
 
+  // ========================================================
+  // 🌟 THE FIX: This function now tells the rest of the app to update!
+  // ========================================================
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user?.subscriberId) return;
@@ -162,6 +161,16 @@ const Settings: React.FC = () => {
     try {
         localStorage.setItem('pronomad_system_config', JSON.stringify(payload));
         document.documentElement.style.setProperty('--brand-primary', settings.theme_color);
+
+        // 👉 THIS IS THE MAGIC LINE YOU MISSED! It updates the global app state instantly.
+        if (typeof updateUser === 'function') {
+            updateUser({ 
+                currency: settings.currency, 
+                themeColor: settings.theme_color,
+                companyName: settings.company_name,
+                companyLogo: settings.company_logo
+            });
+        }
 
         if (!navigator.onLine) throw new Error("Offline");
         const { error } = await supabase.from('system_settings').upsert(payload);
@@ -199,6 +208,7 @@ const Settings: React.FC = () => {
         </div>
       </div>
 
+      {/* SUCCESS MESSAGE */}
       {successMsg && (
         <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 p-4 rounded-xl mb-8 font-bold flex items-center gap-2 animate-in fade-in slide-in-from-top-4 shadow-sm">
           <CheckCircle size={20}/> {successMsg}

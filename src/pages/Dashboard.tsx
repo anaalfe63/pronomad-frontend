@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase'; // 🌟 ADDED SUPABASE IMPORT
 import { 
   TrendingUp, Users, AlertCircle, ArrowRight, Key, Plane, CheckCircle,
@@ -30,7 +30,7 @@ interface ActivityItemProps {
 }
 
 const Dashboard: React.FC = () => {
-  const { user } = useAuth() as any; // Cast as any to bypass strict TS rules
+  const { user } = useTenant() as any; // Cast as any to bypass strict TS rules
   const navigate = useNavigate();
   const MY_SUBSCRIBER_ID = user?.subscriberId || user?.uid || "";
 

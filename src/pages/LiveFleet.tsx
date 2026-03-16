@@ -4,7 +4,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { 
   AlertTriangle, User, Battery, Navigation, RefreshCw,
-  Gauge, Search, ArrowRight, ShieldAlert, MapPin, Siren, Radio, Maximize, CheckCircle2
+  Gauge, Search, ArrowRight, ShieldAlert, MapPin, Siren, Radio, Maximize, CheckCircle2, Map, Save, X
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTenant } from '../contexts/TenantContext';
@@ -26,7 +26,7 @@ interface Vehicle {
 // ============================================================================
 // SMART MAP CONTROLLER
 // ============================================================================
-const MapController: React.FC<{ vehicles: Vehicle[], selectedId: string | number | null }> = ({ vehicles, selectedId }) => {
+const MapController: React.FC<{ vehicles: Vehicle[], selectedId: string | number | null, hqLocation: [number, number] }> = ({ vehicles, selectedId, hqLocation }) => {
   const map = useMap();
 
   useEffect(() => {
@@ -38,8 +38,11 @@ const MapController: React.FC<{ vehicles: Vehicle[], selectedId: string | number
     } else if (vehicles.length > 0) {
       const bounds = L.latLngBounds(vehicles.map(v => [v.lat, v.lng]));
       map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+    } else {
+      // IF NO VEHICLES, SNAP TO THEIR SPECIFIC HQ LOCATION
+      map.flyTo(hqLocation, 12, { duration: 1.5 });
     }
-  }, [selectedId, vehicles.length, map]); 
+  }, [selectedId, vehicles.length, map, hqLocation]); 
 
   return null;
 };
@@ -88,30 +91,55 @@ const LiveFleet: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [lastSync, setLastSync] = useState<Date>(new Date());
 
+  // STATES FOR HQ LOCATION & SMART SEARCH
+  const [hqLocation, setHqLocation] = useState<[number, number]>([5.6037, -0.1870]); // Default fallback
+  const [isEditingHQ, setIsEditingHQ] = useState<boolean>(false);
+  const [editLat, setEditLat] = useState<string>('');
+  const [editLng, setEditLng] = useState<string>('');
+  
+  const [searchLocationQuery, setSearchLocationQuery] = useState<string>('');
+  const [searchLocationStatus, setSearchLocationStatus] = useState<string>('');
+  const [isSearchingLocation, setIsSearchingLocation] = useState<boolean>(false);
+
   // --- SMART POLLING VIA SUPABASE ---
   useEffect(() => {
-    const fetchFleet = async () => {
+    const fetchFleetAndHQ = async () => {
       try {
         if (!user?.subscriberId) return;
 
-        const { data, error } = await supabase
-            .from('vehicles')
-            .select('*')
-            .eq('subscriber_id', user.subscriberId);
+        // 1. Get HQ Location
+        const { data: subData } = await supabase
+            .from('subscribers')
+            .select('fleet_lat, fleet_lng')
+            .eq('id', user.subscriberId)
+            .maybeSingle();
 
-        if (!error && data) {
-            const mappedVehicles: Vehicle[] = data.map(v => ({
-                id: v.id,
-                vehicleId: v.vehicle_id || v.name || 'Unknown',
-                driver: v.current_driver || 'Unassigned',
-                lat: v.lat || 5.6037,
-                lng: v.lng || -0.1870,
-                speed: v.speed || 0,
-                fuel: v.fuel_level || 100,
-                location: v.current_location || 'Unknown',
-                status: v.status || 'Idle',
-                tripTitle: v.current_trip_title || ''
+        if (subData && subData.fleet_lat && subData.fleet_lng) {
+            setHqLocation([subData.fleet_lat, subData.fleet_lng]);
+        }
+
+        // 🌟 THE FIX: Pull from TRIPS table where GPS data exists!
+        const { data: activeTrips, error } = await supabase
+            .from('trips')
+            .select('*')
+            .eq('subscriber_id', user.subscriberId)
+            .not('lat', 'is', null); // Only fetch trips that have active GPS pings
+
+        if (!error && activeTrips) {
+            // Map the active trips to act like 'Vehicles' for the map UI
+            const mappedVehicles: Vehicle[] = activeTrips.map(trip => ({
+                id: trip.id,
+                vehicleId: trip.logistics?.vehicleDetail || `Unit-${String(trip.id).substring(0,4)}`,
+                driver: trip.logistics?.driver || 'Unassigned',
+                lat: trip.lat,
+                lng: trip.lng,
+                speed: trip.current_speed || 0,
+                fuel: 85, // Simulation value until we build OBD2 sensors
+                location: 'Live on Route',
+                status: trip.status || 'Active',
+                tripTitle: trip.title || ''
             }));
+            
             setVehicles(mappedVehicles);
             setLastSync(new Date());
         } 
@@ -122,8 +150,8 @@ const LiveFleet: React.FC = () => {
       }
     };
 
-    fetchFleet(); 
-    const interval = setInterval(fetchFleet, 5000); 
+    fetchFleetAndHQ(); 
+    const interval = setInterval(fetchFleetAndHQ, 3000); // Check every 3 seconds for smooth tracking!
     return () => clearInterval(interval);
   }, [user]);
 
@@ -157,27 +185,149 @@ const LiveFleet: React.FC = () => {
       window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  // SMART SEARCH FUNCTION (Uses Free OpenStreetMap API)
+  const handleSearchLocation = async () => {
+      if (!searchLocationQuery) return;
+      setIsSearchingLocation(true);
+      setSearchLocationStatus('Scanning global maps...');
+      
+      try {
+          const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchLocationQuery)}`);
+          const data = await res.json();
+          
+          if (data && data.length > 0) {
+              setEditLat(data[0].lat);
+              setEditLng(data[0].lon);
+              const shortName = data[0].display_name.split(',').slice(0, 3).join(',');
+              setSearchLocationStatus(`📍 Found: ${shortName}`);
+          } else {
+              setSearchLocationStatus('❌ Location not found. Try adding the country name.');
+              setEditLat('');
+              setEditLng('');
+          }
+      } catch (e) {
+          setSearchLocationStatus('❌ Network error while searching. Try again.');
+      } finally {
+          setIsSearchingLocation(false);
+      }
+  };
+
+  const handleSaveHQ = async () => {
+      if (!editLat || !editLng || !user?.subscriberId) {
+          alert("Please search and select a valid location first.");
+          return;
+      }
+      
+      const newCoords: [number, number] = [parseFloat(editLat), parseFloat(editLng)];
+      
+      try {
+          const { error } = await supabase
+              .from('subscribers')
+              .update({ fleet_lat: newCoords[0], fleet_lng: newCoords[1] })
+              .eq('id', user.subscriberId);
+              
+          if (error) throw error;
+          
+          setHqLocation(newCoords);
+          setIsEditingHQ(false);
+          setSearchLocationQuery('');
+          setSearchLocationStatus('');
+          alert("Fleet Headquarters updated successfully!");
+      } catch (err: any) {
+          alert("Failed to update HQ location: " + err.message);
+      }
+  };
+
   return (
     <div className="animate-fade-in relative pb-16 space-y-8">
       {/* 1. HEADER */}
-      <div>
-        <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-3">
-            Live Fleet Command 
-            {loading ? <RefreshCw size={18} className="animate-spin text-slate-300"/> : <div className="w-2.5 h-2.5 rounded-full animate-pulse" style={{ backgroundColor: APP_COLOR }}></div>}
-        </h2>
-        <p className="text-slate-500 font-medium text-sm mt-1">Real-time GPS telematics synced at {lastSync.toLocaleTimeString()}</p>
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
+        <div>
+          <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight flex items-center gap-3">
+              Live Fleet Command 
+              {loading ? <RefreshCw size={18} className="animate-spin text-slate-300"/> : <div className="w-2.5 h-2.5 rounded-full animate-pulse" style={{ backgroundColor: APP_COLOR }}></div>}
+          </h2>
+          <p className="text-slate-500 font-medium text-sm mt-1">Real-time GPS telematics synced at {lastSync.toLocaleTimeString()}</p>
+        </div>
+        
+        {/* EDIT HQ BUTTON */}
+        <button 
+          onClick={() => {
+              setEditLat(hqLocation[0].toString());
+              setEditLng(hqLocation[1].toString());
+              setSearchLocationStatus('');
+              setSearchLocationQuery('');
+              setIsEditingHQ(true);
+          }}
+          className="flex items-center gap-2 text-sm font-bold bg-white border border-slate-200 shadow-sm px-4 py-2 rounded-xl text-slate-600 hover:text-slate-900 transition-colors"
+        >
+            <Map size={16} style={{ color: APP_COLOR }}/> Set Default HQ
+        </button>
       </div>
+
+      {/* SMART SEARCH HQ MODAL */}
+      {isEditingHQ && (
+         <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+             <div className="bg-white rounded-[2rem] p-8 max-w-md w-full shadow-2xl animate-in zoom-in-95">
+                 <div className="flex justify-between items-center mb-6">
+                     <h3 className="text-xl font-black text-slate-800 flex items-center gap-2"><MapPin size={20} style={{ color: APP_COLOR }}/> Set Fleet Headquarters</h3>
+                     <button onClick={() => setIsEditingHQ(false)} className="text-slate-400 hover:text-red-500"><X size={20}/></button>
+                 </div>
+                 <p className="text-sm text-slate-500 mb-6 font-medium">Type your city, region, or specific landmark below to set the center of your Fleet Map.</p>
+                 
+                 <div className="space-y-4 mb-6">
+                     <div>
+                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block ml-1">Search Location</label>
+                         <div className="flex gap-2">
+                             <input 
+                                type="text" 
+                                value={searchLocationQuery} 
+                                onChange={e => setSearchLocationQuery(e.target.value)} 
+                                onKeyDown={e => e.key === 'Enter' && handleSearchLocation()}
+                                className="w-full bg-slate-50 border p-4 rounded-xl outline-none font-bold focus:ring-2 transition-all text-slate-800" 
+                                style={{ '--tw-ring-color': APP_COLOR } as any} 
+                                placeholder="e.g. Accra, Ghana"
+                             />
+                             <button 
+                                onClick={handleSearchLocation}
+                                disabled={isSearchingLocation || !searchLocationQuery}
+                                className="bg-slate-900 text-white px-5 rounded-xl font-bold hover:bg-slate-800 transition-colors disabled:opacity-50 flex items-center justify-center"
+                             >
+                                 {isSearchingLocation ? <RefreshCw size={20} className="animate-spin"/> : <Search size={20} />}
+                             </button>
+                         </div>
+                         <div className="mt-3 min-h-[24px]">
+                             {searchLocationStatus && (
+                                 <p className={`text-sm font-bold ${searchLocationStatus.includes('Found') ? 'text-emerald-600' : searchLocationStatus.includes('Scanning') ? 'text-blue-500 animate-pulse' : 'text-red-500'}`}>
+                                     {searchLocationStatus}
+                                 </p>
+                             )}
+                         </div>
+                     </div>
+                 </div>
+
+                 <button 
+                    onClick={handleSaveHQ} 
+                    disabled={!editLat}
+                    className="w-full py-4 rounded-xl font-bold text-white flex items-center justify-center gap-2 shadow-lg transition-all hover:brightness-110 active:scale-95 disabled:opacity-50 disabled:grayscale" 
+                    style={{ backgroundColor: APP_COLOR }}
+                 >
+                     <Save size={18}/> Lock in this Location
+                 </button>
+             </div>
+         </div>
+      )}
 
       {/* 2. HUGE HERO MAP */}
       <div className="w-full h-[60vh] min-h-[500px] bg-slate-200 rounded-[3rem] shadow-xl border-4 border-white/60 overflow-hidden relative isolate">
-          <MapContainer center={[5.6037, -0.1870] as [number, number]} zoom={13} className="h-full w-full z-0">
+          <MapContainer center={hqLocation} zoom={13} className="h-full w-full z-0">
               <TileLayer 
                 attribution='&copy; OpenStreetMap' 
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" 
                 className="map-tiles-muted" 
               />
               
-              <MapController vehicles={filteredVehicles} selectedId={selectedVehicleId} />
+              <MapController vehicles={filteredVehicles} selectedId={selectedVehicleId} hqLocation={hqLocation} />
 
               {filteredVehicles.map((v) => (
                   <Marker key={v.id} position={[v.lat, v.lng]} icon={getMarkerIcon(v, APP_COLOR)}>
@@ -291,7 +441,7 @@ const LiveFleet: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
               {filteredVehicles.length === 0 ? (
                   <div className="col-span-full p-12 text-center text-slate-400 text-base font-bold bg-white rounded-[2rem] border-2 border-dashed border-slate-200">
-                      {loading ? 'Connecting to GPS Satellites...' : 'No matching vehicles found.'}
+                      {loading ? 'Connecting to GPS Satellites...' : 'No active vehicles currently tracking.'}
                   </div>
               ) : (
                   filteredVehicles.map((v) => (

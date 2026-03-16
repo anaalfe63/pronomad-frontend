@@ -46,6 +46,7 @@ const AIHub: React.FC = () => {
     const displayContent = contentMap[activeFeature];
 
     return (
+        
         <div className="relative min-h-[85vh] bg-[#fffff] overflow-hidden flex flex-col items-center justify-center p-4 py-20 md:py-0 font-sans">
             
             <div className="w-full max-w-xl bg-white rounded-[2.5rem] shadow-[0_20px_50px_-15px_rgba(0,0,0,0.08)] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-500">

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import { 
   MapPin, Users, Receipt, CheckCircle2, ChevronRight, Camera, 
   Bus, Clock, Phone, AlertTriangle, LogOut, Navigation 
@@ -16,7 +16,7 @@ interface Trip {
 }
 
 const MobileFieldApp: React.FC = () => {
-  const { user, logout } = useAuth() as any;
+  const { user, logout } = useTenant() as any;
   const [activeTab, setActiveTab] = useState<'itinerary' | 'manifest' | 'expenses'>('itinerary');
   const [myTrip, setMyTrip] = useState<Trip | null>(null);
   const [loading, setLoading] = useState(true);
