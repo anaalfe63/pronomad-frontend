@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase';
 import { 
   Power, Sun, Moon, Volume2, Volume1, VolumeX, Navigation, Users, 
   Receipt, LayoutDashboard, CloudSun, Bus, ArrowRight, 
-  CheckCircle2, RefreshCw
+  CheckCircle2, RefreshCw, ClipboardCheck
 } from 'lucide-react';
 
 const Landing: React.FC = () => {
@@ -120,9 +120,9 @@ const Landing: React.FC = () => {
                 <span className="absolute hidden md:block left-14 bg-slate-800 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Manifest</span>
             </button>
 
-            <button onClick={() => navigate('/expenses')} className={`relative flex items-center justify-center w-12 h-12 transition-colors group ${isDarkMode ? 'text-slate-400 hover:text-white' : 'text-slate-400 hover:text-slate-800'}`}>
-                <Receipt size={26} />
-                <span className="absolute hidden md:block left-14 bg-slate-800 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Expenses</span>
+            <button onClick={() => navigate('/field-app')} className={`relative flex items-center justify-center w-12 h-12 transition-colors group ${isDarkMode ? 'text-slate-400 hover:text-white' : 'text-slate-400 hover:text-slate-800'}`}>
+                <ClipboardCheck size={26} />
+                <span className="absolute hidden md:block left-14 bg-slate-800 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">Field Tasks</span>
             </button>
 
             {isCEO && (
