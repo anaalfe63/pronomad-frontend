@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import useSystemPresence from '../hooks/useSystemPresence';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase'; 
 import { 
@@ -30,10 +31,15 @@ interface ActivityItemProps {
 }
 
 const Dashboard: React.FC = () => {
-  const { user } = useTenant() as any; // Cast as any to bypass strict TS rules
+  // 1. Get the user FIRST
+  const { user } = useTenant() as any; 
   const navigate = useNavigate();
 
+  // 2. Define the ID
   const MY_SUBSCRIBER_ID = user?.subscriberId || user?.uid || "";
+
+  // 3. NOW pass it into the presence hook!
+  useSystemPresence(MY_SUBSCRIBER_ID); 
 
   // --- STATE FOR REAL DATA ---
   const [stats, setStats] = useState<DashboardStats>({ 

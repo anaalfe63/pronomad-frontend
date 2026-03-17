@@ -4,14 +4,14 @@ import {
   Menu, X, LayoutDashboard, User, LogOut, Clock, 
   Users, ChevronRight, ShieldAlert, Activity, 
   UserPlus, MessageSquare, FileText, Coffee, Bus,
-  Receipt, Navigation, Ticket
+  Receipt, Navigation, Ticket, Map
 } from 'lucide-react';
 import { useTenant } from '../contexts/TenantContext';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 
 interface PassengerData { id: string | number; first_name: string; last_name: string; phone?: string; seat_number?: string; boarded: boolean; dietary_reqs?: string; notes?: string; trip_id?: string | number; }
-interface TripData { id: string | number; title: string; trip_ref: string; status: string; itinerary?: any[]; }
+interface TripData { id: string | number; title: string; trip_ref: string; status: string; logistics?: any; itinerary?: any[]; }
 
 const GuideApp: React.FC = () => {
   const { user, logout } = useTenant();
@@ -25,6 +25,10 @@ const GuideApp: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [filter, setFilter] = useState<'all' | 'missing' | 'boarded'>('all');
+
+  // 🌟 NEW: Live Routing States
+  const [pickupLocation, setPickupLocation] = useState('');
+  const [destination, setDestination] = useState('');
 
   // --- MODAL STATES ---
   const [selectedPax, setSelectedPax] = useState<PassengerData | null>(null);
@@ -42,7 +46,7 @@ const GuideApp: React.FC = () => {
   const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
 
   // =====================================================================
-  // 1. FETCH CLOUD MANIFEST
+  // 1. FETCH CLOUD MANIFEST & ITINERARY
   // =====================================================================
   useEffect(() => {
     const fetchManifest = async () => {
@@ -53,6 +57,15 @@ const GuideApp: React.FC = () => {
           const myTrip = trips.find(t => t.logistics?.guide === user.fullName || t.logistics?.driver === user.fullName) || trips[0];
           if (myTrip) {
             setActiveTrip(myTrip);
+            
+            // 🌟 Auto-fill the Pickup Point from the Database Itinerary
+            const firstStop = myTrip.itinerary?.[0]?.location;
+            if (firstStop) {
+                setPickupLocation(firstStop);
+            } else if (myTrip.logistics?.pickup) {
+                setPickupLocation(myTrip.logistics.pickup);
+            }
+
             const { data: paxData } = await supabase.from('passengers').select('*').eq('trip_id', myTrip.id).order('first_name', { ascending: true });
             if (paxData) setPassengers(paxData);
           }
@@ -81,7 +94,6 @@ const GuideApp: React.FC = () => {
       } catch (err) { alert("Failed to add walk-in."); } finally { setIsAddingWalkIn(false); }
   };
 
-  // 🌟 NEW: LIVE CLOUD EXPENSE SUBMISSION
   const handleExpenseSubmit = async () => {
       if (!expenseAmount || !user?.subscriberId) return;
       setIsSubmittingExpense(true);
@@ -100,7 +112,6 @@ const GuideApp: React.FC = () => {
       } catch (e) { alert("Error submitting expense."); } finally { setIsSubmittingExpense(false); }
   };
 
-  // 🌟 NEW: LIVE CLOUD SOS
   const triggerSOS = async () => {
       if (!window.confirm("🚨 SEND EMERGENCY ALERT TO HQ?")) return;
       try {
@@ -110,6 +121,17 @@ const GuideApp: React.FC = () => {
           }]);
           alert("SOS Broadcast Sent. Base is notified.");
       } catch (e) { alert("SOS Failed. Please call Base."); }
+  };
+
+  // 🌟 NEW: Launch Full Google Maps GPS Route
+  const startGPSNavigation = () => {
+      if (!destination) return alert("Please enter a destination to start routing.");
+      
+      // Use official Google Maps direction API format. If pickup is empty, it uses live device location.
+      const originParam = pickupLocation ? `&origin=${encodeURIComponent(pickupLocation)}` : '';
+      const destParam = `&destination=${encodeURIComponent(destination)}`;
+      
+      window.open(`https://www.google.com/maps/dir/?api=1${originParam}${destParam}`, '_blank');
   };
 
   if (loading) return <div className="h-screen flex items-center justify-center bg-slate-50"><Activity className="text-slate-400 animate-spin" size={48} /></div>;
@@ -167,8 +189,57 @@ const GuideApp: React.FC = () => {
          <ActionButton icon={<ShieldAlert className="text-red-500" size={20}/>} label="SOS" onClick={triggerSOS} />
       </div>
 
+      {/* 🗺️ LIVE ROUTING WIDGET */}
+      <div className="px-4 mt-6 relative z-0">
+        <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
+            <div className="flex items-center gap-2 mb-4">
+                <Map size={18} style={{ color: APP_COLOR }} />
+                <h4 className="font-black text-slate-800">Live GPS Routing</h4>
+            </div>
+
+            <div className="relative border-l-2 border-dashed border-slate-200 ml-3 pl-6 space-y-4">
+                {/* Pickup Point */}
+                <div className="relative">
+                    <div className="absolute -left-[31px] top-1/2 -translate-y-1/2 w-4 h-4 bg-white border-2 rounded-full" style={{ borderColor: APP_COLOR }}></div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pickup Point</label>
+                    <input 
+                        type="text" 
+                        value={pickupLocation}
+                        onChange={(e) => setPickupLocation(e.target.value)}
+                        placeholder="Leave blank for live GPS..."
+                        className="w-full bg-slate-50 border border-slate-100 text-slate-800 text-sm font-bold p-3 rounded-xl outline-none focus:ring-2 transition-all mt-1"
+                        style={{ '--tw-ring-color': `${APP_COLOR}50` } as any}
+                    />
+                </div>
+
+                {/* Destination Point */}
+                <div className="relative">
+                    <div className="absolute -left-[31px] top-1/2 -translate-y-1/2 w-4 h-4 bg-white border-2 border-slate-800 rounded-full"></div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Destination</label>
+                    <input 
+                        type="text" 
+                        value={destination}
+                        onChange={(e) => setDestination(e.target.value)}
+                        placeholder="Enter destination..."
+                        className="w-full bg-slate-50 border border-slate-100 text-slate-800 text-sm font-bold p-3 rounded-xl outline-none focus:ring-2 transition-all mt-1"
+                        style={{ '--tw-ring-color': `${APP_COLOR}50` } as any}
+                    />
+                </div>
+            </div>
+
+            <button 
+                onClick={startGPSNavigation}
+                disabled={!destination}
+                className="w-full mt-6 text-white font-black py-4 rounded-xl shadow-lg hover:brightness-110 transition-all active:scale-95 disabled:opacity-50 disabled:grayscale flex items-center justify-center gap-2"
+                style={{ backgroundColor: APP_COLOR }}
+            >
+                <Navigation size={18} className="fill-white"/> Start Navigation
+            </button>
+        </div>
+      </div>
+
       {/* 🔍 SEARCH & FILTERS */}
-      <div className="p-4 mt-4 space-y-4 relative z-0">
+      <div className="p-4 mt-2 space-y-4 relative z-0">
         <div className="bg-white rounded-2xl shadow-sm p-2 flex items-center gap-2 border border-slate-200">
           <Search size={20} className="text-slate-400 ml-2" />
           <input type="text" placeholder="Search manifest..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full p-2 outline-none text-sm font-bold text-slate-800 bg-transparent"/>

@@ -5,7 +5,7 @@ import { supabase } from '../lib/supabase';
 import { 
   MapPin, Users, Receipt, CheckCircle2, ChevronLeft,ChevronRight, Camera, 
   Bus, Clock, Phone, AlertTriangle, Home, Navigation, 
-  Activity, CheckSquare, Coffee, ExternalLink
+  Activity, CheckSquare, Coffee, ExternalLink, Target, Map
 } from 'lucide-react';
 
 interface PassengerData {
@@ -38,6 +38,10 @@ const MobileFieldApp: React.FC = () => {
   const [passengers, setPassengers] = useState<PassengerData[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // 🌟 NEW: Live Routing States
+  const [pickupLocation, setPickupLocation] = useState('');
+  const [destination, setDestination] = useState('');
+
   // Expense Form State
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseDesc, setExpenseDesc] = useState('');
@@ -51,7 +55,6 @@ const MobileFieldApp: React.FC = () => {
       if (!user?.subscriberId || !user?.fullName) return;
       setLoading(true);
       try {
-        // Find active trips for this tenant
         const { data: trips } = await supabase
           .from('trips')
           .select('*')
@@ -59,16 +62,22 @@ const MobileFieldApp: React.FC = () => {
           .neq('status', 'Completed');
 
         if (trips && trips.length > 0) {
-          // Match the trip to the logged-in driver/guide
           const assignedTrip = trips.find(t => 
              t.logistics?.driver === user.fullName || 
              t.logistics?.guide === user.fullName
-          ) || trips[0]; // Fallback to first trip for testing
+          ) || trips[0]; 
 
           if (assignedTrip) {
             setMyTrip(assignedTrip);
             
-            // Fetch the passengers for this specific trip
+            // 🌟 Auto-fill the Pickup Point from the Database Itinerary
+            const firstStop = assignedTrip.itinerary?.[0]?.location;
+            if (firstStop) {
+                setPickupLocation(firstStop);
+            } else if (assignedTrip.logistics?.pickup) {
+                setPickupLocation(assignedTrip.logistics.pickup);
+            }
+            
             const { data: paxData } = await supabase
               .from('passengers')
               .select('*')
@@ -89,13 +98,10 @@ const MobileFieldApp: React.FC = () => {
   }, [user]);
 
   // =====================================================================
-  // 2. FIELD ACTIONS (Sync to Supabase)
+  // 2. FIELD ACTIONS
   // =====================================================================
   const handleCheckIn = async (paxId: string | number, currentStatus: boolean) => {
-    // Optimistic UI Update
     setPassengers(prev => prev.map(p => p.id === paxId ? { ...p, boarded: !currentStatus } : p));
-    
-    // Cloud Sync
     if (navigator.onLine) {
         await supabase.from('passengers').update({ boarded: !currentStatus }).eq('id', paxId);
     }
@@ -124,8 +130,19 @@ const MobileFieldApp: React.FC = () => {
     }
   };
 
-  // Launch Google Maps
-  const openGPS = (locationString: string) => {
+  // 🌟 NEW: Launch Full Google Maps GPS Route
+  const startGPSNavigation = () => {
+      if (!destination) return alert("Please enter a destination to start routing.");
+      
+      // If pickup is empty, Google Maps will automatically use the phone's live GPS location!
+      const originParam = pickupLocation ? `&origin=${encodeURIComponent(pickupLocation)}` : '';
+      const destParam = `&destination=${encodeURIComponent(destination)}`;
+      
+      window.open(`https://www.google.com/maps/dir/?api=1${originParam}${destParam}`, '_blank');
+  };
+
+  // Quick Map Launch for individual stops
+  const openStopGPS = (locationString: string) => {
       window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(locationString)}`, '_blank');
   };
 
@@ -138,10 +155,8 @@ const MobileFieldApp: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col max-w-md mx-auto shadow-2xl relative font-sans">
       
-      {/* 📱 NATIVE APP HEADER (With Back & Home) */}
+      {/* 📱 NATIVE APP HEADER */}
       <div className="bg-slate-900 text-white pt-10 pb-6 px-4 shadow-lg shrink-0 rounded-b-[2rem] sticky top-0 z-50">
-        
-        {/* Navigation Bar */}
         <div className="flex justify-between items-center mb-6">
           <button onClick={() => navigate(-1)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition-colors flex items-center justify-center">
             <ChevronLeft size={20} />
@@ -183,6 +198,53 @@ const MobileFieldApp: React.FC = () => {
         {myTrip && activeTab === 'itinerary' && (
           <div className="space-y-4 animate-in slide-in-from-left-4">
             
+            {/* 🌟 NEW: LIVE ROUTING & DISPATCH WIDGET */}
+            <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
+                <div className="flex items-center gap-2 mb-4">
+                    <Map size={18} style={{ color: APP_COLOR }} />
+                    <h4 className="font-black text-slate-800">Live GPS Routing</h4>
+                </div>
+
+                <div className="relative border-l-2 border-dashed border-slate-200 ml-3 pl-6 space-y-4">
+                    {/* Pickup Point */}
+                    <div className="relative">
+                        <div className="absolute -left-[31px] top-1/2 -translate-y-1/2 w-4 h-4 bg-white border-2 rounded-full" style={{ borderColor: APP_COLOR }}></div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pickup Point</label>
+                        <input 
+                            type="text" 
+                            value={pickupLocation}
+                            onChange={(e) => setPickupLocation(e.target.value)}
+                            placeholder="Leave blank for live GPS..."
+                            className="w-full bg-slate-50 border border-slate-100 text-slate-800 text-sm font-bold p-3 rounded-xl outline-none focus:ring-2 transition-all mt-1"
+                            style={{ '--tw-ring-color': `${APP_COLOR}50` } as any}
+                        />
+                    </div>
+
+                    {/* Destination Point */}
+                    <div className="relative">
+                        <div className="absolute -left-[31px] top-1/2 -translate-y-1/2 w-4 h-4 bg-white border-2 border-slate-800 rounded-full"></div>
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Destination</label>
+                        <input 
+                            type="text" 
+                            value={destination}
+                            onChange={(e) => setDestination(e.target.value)}
+                            placeholder="Ask guide for destination..."
+                            className="w-full bg-slate-50 border border-slate-100 text-slate-800 text-sm font-bold p-3 rounded-xl outline-none focus:ring-2 transition-all mt-1"
+                            style={{ '--tw-ring-color': `${APP_COLOR}50` } as any}
+                        />
+                    </div>
+                </div>
+
+                <button 
+                    onClick={startGPSNavigation}
+                    disabled={!destination}
+                    className="w-full mt-6 text-white font-black py-4 rounded-xl shadow-lg hover:brightness-110 transition-all active:scale-95 disabled:opacity-50 disabled:grayscale flex items-center justify-center gap-2"
+                    style={{ backgroundColor: APP_COLOR }}
+                >
+                    <Navigation size={18} className="fill-white"/> Start Navigation
+                </button>
+            </div>
+
             {/* Vehicle Pre-Check Widget */}
             <div className="bg-teal-50 border border-teal-100 p-4 rounded-2xl flex items-center justify-between shadow-sm">
                 <div className="flex items-center gap-3">
@@ -195,14 +257,14 @@ const MobileFieldApp: React.FC = () => {
                 <ChevronRight className="text-teal-400"/>
             </div>
 
-            <h3 className="font-black text-slate-800 text-lg ml-2 mb-2 mt-6">Daily Route</h3>
+            <h3 className="font-black text-slate-800 text-lg ml-2 mb-2 mt-6">Database Itinerary</h3>
             
             {(!myTrip.itinerary || myTrip.itinerary.length === 0) ? (
                 <div className="p-8 text-center bg-white rounded-2xl border border-slate-100"><p className="text-slate-400 font-bold">No itinerary stops recorded.</p></div>
             ) : (
                 myTrip.itinerary.map((step: any, index: number) => (
                   <div key={index} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex gap-4 relative overflow-hidden">
-                    <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ backgroundColor: APP_COLOR }}></div>
+                    <div className="absolute left-0 top-0 bottom-0 w-1.5 bg-slate-300"></div>
                     <div className="text-center shrink-0 w-16">
                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Stop {index + 1}</p>
                       <p className="text-sm font-black text-slate-800 mt-1">{step.time || '00:00'}</p>
@@ -211,10 +273,9 @@ const MobileFieldApp: React.FC = () => {
                       <h4 className="font-bold text-slate-900">{step.activity || step.title}</h4>
                       <p className="text-xs text-slate-500 flex items-start gap-1 mt-1 font-medium"><MapPin size={12} className="shrink-0 mt-0.5"/> {step.location || 'Location TBA'}</p>
                       
-                      {/* One-Tap Navigation Button */}
                       {step.location && (
-                          <button onClick={() => openGPS(step.location)} className="mt-3 flex items-center gap-1.5 bg-slate-50 text-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border border-slate-200 hover:bg-slate-100 transition-colors">
-                              <ExternalLink size={12}/> Get Directions
+                          <button onClick={() => openStopGPS(step.location)} className="mt-3 flex items-center gap-1.5 bg-slate-50 text-slate-600 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border border-slate-200 hover:bg-slate-100 transition-colors">
+                              <ExternalLink size={12}/> View on Map
                           </button>
                       )}
                     </div>
@@ -283,7 +344,8 @@ const MobileFieldApp: React.FC = () => {
                     value={expenseAmount}
                     onChange={e => setExpenseAmount(e.target.value)}
                     placeholder="0.00" 
-                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-xl font-black text-2xl text-slate-800 mb-5 outline-none focus:border-teal-400 transition-colors"
+                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-xl font-black text-2xl text-slate-800 mb-5 outline-none focus:ring-2 transition-colors"
+                    style={{ '--tw-ring-color': `${APP_COLOR}50` } as any}
                 />
                 
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Description / Reason</label>
@@ -292,7 +354,8 @@ const MobileFieldApp: React.FC = () => {
                     value={expenseDesc}
                     onChange={e => setExpenseDesc(e.target.value)}
                     placeholder="e.g. Emergency fuel, Toll booth..." 
-                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-xl font-bold text-sm mb-6 outline-none focus:border-teal-400 transition-colors"
+                    className="w-full bg-slate-50 border border-slate-200 p-4 rounded-xl font-bold text-sm mb-6 outline-none focus:ring-2 transition-colors"
+                    style={{ '--tw-ring-color': `${APP_COLOR}50` } as any}
                 />
                 
                 <button className="w-full bg-slate-50 text-slate-500 border-2 border-dashed border-slate-200 py-6 rounded-2xl flex flex-col items-center justify-center gap-2 mb-6 cursor-not-allowed">
