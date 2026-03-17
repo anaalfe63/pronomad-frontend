@@ -740,7 +740,7 @@ const StaffManagement: React.FC = () => {
                           <option value="Operations">Operations Manager (HQ Access)</option>
                           <option value="Finance">Finance Officer (HQ Access)</option>
                           <option value="CEO">CEO (Full Access)</option>
-                          <option value="PROADMIN">PROADMIN (God Mode)</option>
+                          
                         </select>
                         <p className="text-[10px] text-slate-500 leading-relaxed font-medium mt-2">This determines what data they can see when they log in to Pronomad.</p>
                     </div>
