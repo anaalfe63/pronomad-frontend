@@ -160,7 +160,7 @@ const Login: React.FC = () => {
             </button>
 
             <div className="text-center pt-2">
-                <p className="text-xs text-slate-400 font-medium">Protected by Enterprise Security</p>
+                <p className="text-xs text-slate-400 font-medium">Powered by Vieve Studios</p>
             </div>
           </form>
         </div>

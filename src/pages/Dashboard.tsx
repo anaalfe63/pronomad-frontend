@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTenant } from '../contexts/TenantContext';
-import { supabase } from '../lib/supabase'; // 🌟 ADDED SUPABASE IMPORT
+import { supabase } from '../lib/supabase'; 
 import { 
   TrendingUp, Users, AlertCircle, ArrowRight, Key, Plane, CheckCircle,
   Building2, BusFront, CalendarDays, MapPin, Wallet, Activity,
@@ -32,6 +32,7 @@ interface ActivityItemProps {
 const Dashboard: React.FC = () => {
   const { user } = useTenant() as any; // Cast as any to bypass strict TS rules
   const navigate = useNavigate();
+
   const MY_SUBSCRIBER_ID = user?.subscriberId || user?.uid || "";
 
   // --- STATE FOR REAL DATA ---
@@ -161,11 +162,7 @@ const Dashboard: React.FC = () => {
                <div className="bg-white p-2 rounded-xl shadow-sm text-teal-600 shrink-0"><MapPin size={20}/></div>
                <div className="w-full">
                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Select Package</p>
-                 <input 
-                   type="text" value={quickSearch.packageSearch} onChange={e => setQuickSearch({...quickSearch, packageSearch: e.target.value})}
-                   placeholder="Search active tours..." 
-                   className="text-sm font-bold text-slate-800 bg-transparent outline-none w-full placeholder:text-slate-300"
-                 />
+                 
                </div>
             </div>
 
@@ -175,10 +172,6 @@ const Dashboard: React.FC = () => {
                <div className="bg-white p-2 rounded-xl shadow-sm text-teal-600 shrink-0"><Users size={20}/></div>
                <div className="w-full">
                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Passenger Count</p>
-                 <input 
-                   type="number" min="1" value={quickSearch.pax} onChange={e => setQuickSearch({...quickSearch, pax: e.target.value})}
-                   className="text-sm font-bold text-slate-800 bg-transparent outline-none w-full"
-                 />
                </div>
             </div>
 
@@ -186,10 +179,6 @@ const Dashboard: React.FC = () => {
                <div className="bg-white p-2 rounded-xl shadow-sm text-teal-600 shrink-0"><CalendarDays size={20}/></div>
                <div className="w-full">
                  <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Travel Dates</p>
-                 <input 
-                   type="date" value={quickSearch.date} onChange={e => setQuickSearch({...quickSearch, date: e.target.value})}
-                   className="text-sm font-bold text-slate-800 bg-transparent outline-none w-full uppercase"
-                 />
                </div>
             </div>
 

@@ -1,14 +1,22 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMap, CircleMarker } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { 
   AlertTriangle, User, Battery, Navigation, RefreshCw,
-  Gauge, Search, ArrowRight, ShieldAlert, MapPin, Siren, Radio, Maximize, CheckCircle2, Map, Save, X
+  Gauge, Search, ArrowRight, ShieldAlert, MapPin, Siren, Radio, Maximize, CheckCircle2, Map, Save, X, Flame
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
+
+// Fix for default Leaflet marker icons not showing in React/Vite
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+});
 
 interface Vehicle {
   id: string | number;
@@ -39,7 +47,6 @@ const MapController: React.FC<{ vehicles: Vehicle[], selectedId: string | number
       const bounds = L.latLngBounds(vehicles.map(v => [v.lat, v.lng]));
       map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
     } else {
-      // IF NO VEHICLES, SNAP TO THEIR SPECIFIC HQ LOCATION
       map.flyTo(hqLocation, 12, { duration: 1.5 });
     }
   }, [selectedId, vehicles.length, map, hqLocation]); 
@@ -92,7 +99,7 @@ const LiveFleet: React.FC = () => {
   const [lastSync, setLastSync] = useState<Date>(new Date());
 
   // STATES FOR HQ LOCATION & SMART SEARCH
-  const [hqLocation, setHqLocation] = useState<[number, number]>([5.6037, -0.1870]); // Default fallback
+  const [hqLocation, setHqLocation] = useState<[number, number]>([5.6037, -0.1870]); 
   const [isEditingHQ, setIsEditingHQ] = useState<boolean>(false);
   const [editLat, setEditLat] = useState<string>('');
   const [editLng, setEditLng] = useState<string>('');
@@ -101,13 +108,42 @@ const LiveFleet: React.FC = () => {
   const [searchLocationStatus, setSearchLocationStatus] = useState<string>('');
   const [isSearchingLocation, setIsSearchingLocation] = useState<boolean>(false);
 
-  // --- SMART POLLING VIA SUPABASE ---
+  // HEATMAP STATES
+  const [heatmapLocations, setHeatmapLocations] = useState<any[]>([]);
+  const [showHeatmap, setShowHeatmap] = useState<boolean>(false);
+
+  // --- FETCH ALL HISTORICAL LOCATIONS FOR HEATMAP ---
+  useEffect(() => {
+    const fetchHeatmapData = async () => {
+        if (!user?.subscriberId) return;
+        
+        // 🌟 FIX: Query 'logistics' json column instead of 'lat'/'lng'
+        const { data } = await supabase
+            .from('trips')
+            .select('title, logistics')
+            .eq('subscriber_id', user.subscriberId);
+            
+        if (data) {
+            // Filter in JS to find trips that actually have a current_lat saved
+            const validPoints = data
+                .filter(t => t.logistics && t.logistics.current_lat)
+                .map(t => ({
+                    title: t.title,
+                    lat: t.logistics.current_lat,
+                    lng: t.logistics.current_lng
+                }));
+            setHeatmapLocations(validPoints);
+        }
+    };
+    fetchHeatmapData();
+  }, [user]);
+
+  // --- SMART POLLING VIA SUPABASE (Runs every 3s) ---
   useEffect(() => {
     const fetchFleetAndHQ = async () => {
       try {
         if (!user?.subscriberId) return;
 
-        // 1. Get HQ Location
         const { data: subData } = await supabase
             .from('subscribers')
             .select('fleet_lat, fleet_lng')
@@ -118,27 +154,29 @@ const LiveFleet: React.FC = () => {
             setHqLocation([subData.fleet_lat, subData.fleet_lng]);
         }
 
-        // 🌟 THE FIX: Pull from TRIPS table where GPS data exists!
+        // 🌟 THE FIX: Pull from TRIPS table
         const { data: activeTrips, error } = await supabase
             .from('trips')
             .select('*')
             .eq('subscriber_id', user.subscriberId)
-            .not('lat', 'is', null); // Only fetch trips that have active GPS pings
+            .in('status', ['Active', 'In Transit']); // Only pull active trips
 
         if (!error && activeTrips) {
-            // Map the active trips to act like 'Vehicles' for the map UI
-            const mappedVehicles: Vehicle[] = activeTrips.map(trip => ({
-                id: trip.id,
-                vehicleId: trip.logistics?.vehicleDetail || `Unit-${String(trip.id).substring(0,4)}`,
-                driver: trip.logistics?.driver || 'Unassigned',
-                lat: trip.lat,
-                lng: trip.lng,
-                speed: trip.current_speed || 0,
-                fuel: 85, // Simulation value until we build OBD2 sensors
-                location: 'Live on Route',
-                status: trip.status || 'Active',
-                tripTitle: trip.title || ''
-            }));
+            // Filter in JS to ensure we only map vehicles with GPS data
+            const mappedVehicles: Vehicle[] = activeTrips
+                .filter(trip => trip.logistics && trip.logistics.current_lat) 
+                .map(trip => ({
+                    id: trip.id,
+                    vehicleId: trip.logistics?.vehicleDetail || `Unit-${String(trip.id).substring(0,4)}`,
+                    driver: trip.logistics?.driver || 'Unassigned',
+                    lat: trip.logistics.current_lat,
+                    lng: trip.logistics.current_lng,
+                    speed: trip.logistics.current_speed || 0,
+                    fuel: 85, 
+                    location: 'Live on Route',
+                    status: trip.status || 'Active',
+                    tripTitle: trip.title || ''
+                }));
             
             setVehicles(mappedVehicles);
             setLastSync(new Date());
@@ -151,7 +189,7 @@ const LiveFleet: React.FC = () => {
     };
 
     fetchFleetAndHQ(); 
-    const interval = setInterval(fetchFleetAndHQ, 3000); // Check every 3 seconds for smooth tracking!
+    const interval = setInterval(fetchFleetAndHQ, 3000); 
     return () => clearInterval(interval);
   }, [user]);
 
@@ -170,7 +208,7 @@ const LiveFleet: React.FC = () => {
           total: vehicles.length,
           speeding: vehicles.filter(v => v.speed > 100).length,
           lowFuel: vehicles.filter(v => v.fuel < 20).length,
-          active: vehicles.filter(v => v.status === 'Active' || v.status === 'In Transit').length
+          active: vehicles.length
       };
   }, [vehicles]);
 
@@ -185,7 +223,6 @@ const LiveFleet: React.FC = () => {
       window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // SMART SEARCH FUNCTION (Uses Free OpenStreetMap API)
   const handleSearchLocation = async () => {
       if (!searchLocationQuery) return;
       setIsSearchingLocation(true);
@@ -250,19 +287,28 @@ const LiveFleet: React.FC = () => {
           <p className="text-slate-500 font-medium text-sm mt-1">Real-time GPS telematics synced at {lastSync.toLocaleTimeString()}</p>
         </div>
         
-        {/* EDIT HQ BUTTON */}
-        <button 
-          onClick={() => {
-              setEditLat(hqLocation[0].toString());
-              setEditLng(hqLocation[1].toString());
-              setSearchLocationStatus('');
-              setSearchLocationQuery('');
-              setIsEditingHQ(true);
-          }}
-          className="flex items-center gap-2 text-sm font-bold bg-white border border-slate-200 shadow-sm px-4 py-2 rounded-xl text-slate-600 hover:text-slate-900 transition-colors"
-        >
-            <Map size={16} style={{ color: APP_COLOR }}/> Set Default HQ
-        </button>
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={() => setShowHeatmap(!showHeatmap)}
+            className={`flex items-center gap-2 text-sm font-bold border px-4 py-2 rounded-xl transition-all shadow-sm
+                ${showHeatmap ? 'bg-orange-50 border-orange-200 text-orange-600' : 'bg-white border-slate-200 text-slate-600 hover:text-slate-900'}`}
+          >
+              <Flame size={16} className={showHeatmap ? "animate-pulse" : ""} /> {showHeatmap ? 'Hide Heatmap' : 'Overlay Heatmap'}
+          </button>
+
+          <button 
+            onClick={() => {
+                setEditLat(hqLocation[0].toString());
+                setEditLng(hqLocation[1].toString());
+                setSearchLocationStatus('');
+                setSearchLocationQuery('');
+                setIsEditingHQ(true);
+            }}
+            className="flex items-center gap-2 text-sm font-bold bg-white border border-slate-200 shadow-sm px-4 py-2 rounded-xl text-slate-600 hover:text-slate-900 transition-colors"
+          >
+              <Map size={16} style={{ color: APP_COLOR }}/> Set Default HQ
+          </button>
+        </div>
       </div>
 
       {/* SMART SEARCH HQ MODAL */}
@@ -329,6 +375,18 @@ const LiveFleet: React.FC = () => {
               
               <MapController vehicles={filteredVehicles} selectedId={selectedVehicleId} hqLocation={hqLocation} />
 
+              {/* RENDER HEATMAP CLUSTERS IF TOGGLED ON */}
+              {showHeatmap && heatmapLocations.map((loc, i) => (
+                  <React.Fragment key={`heat-${i}`}>
+                      <CircleMarker center={[loc.lat, loc.lng]} radius={40} fillColor="#ef4444" color="transparent" fillOpacity={0.2}>
+                          <Popup>{loc.title}</Popup>
+                      </CircleMarker>
+                      <CircleMarker center={[loc.lat, loc.lng]} radius={15} fillColor="#dc2626" color="transparent" fillOpacity={0.4} />
+                      <CircleMarker center={[loc.lat, loc.lng]} radius={4} fillColor="#b91c1c" color="white" weight={2} fillOpacity={1} />
+                  </React.Fragment>
+              ))}
+
+              {/* LIVE VEHICLE MARKERS */}
               {filteredVehicles.map((v) => (
                   <Marker key={v.id} position={[v.lat, v.lng]} icon={getMarkerIcon(v, APP_COLOR)}>
                       <Popup className="rounded-3xl shadow-2xl border-none">

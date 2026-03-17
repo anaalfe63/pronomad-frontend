@@ -1,5 +1,5 @@
 import React, { ReactNode } from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { TenantProvider, useTenant } from './contexts/TenantContext';
 
 // Layout Components
@@ -15,9 +15,10 @@ import AdminHub from './pages/AdminHub';
 // Pages
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import Landing from './pages/Landing';
 import StaffManagement from './pages/StaffManagement';
 import BookingEngine from './pages/BookingEngine';
-import TourOperations from './pages/TourOperations'; // 🌟 Fixed Import
+import TourOperations from './pages/TourOperations';
 import LiveFleet from './pages/LiveFleet';
 import SupplierPortal from './pages/SupplierPortal';
 import Expenses from './pages/Expenses';
@@ -58,21 +59,27 @@ const AppLayout: React.FC<LayoutProps> = ({ children }) => (
   </div>
 );
 
-// 🛡️ SMART ROLE GUARD
+// 🛡️ SMART ROLE GUARD (Built right into App.tsx)
 const RoleGuard: React.FC<{ children: ReactNode, allowedRoles?: string[] }> = ({ children, allowedRoles }) => {
   const { user, initializing } = useTenant(); 
+  const location = useLocation();
   
   if (initializing) return <div className="h-screen flex items-center justify-center font-bold text-slate-400">Loading Secure Environment...</div>;
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) return <Navigate to="/login" replace state={{ from: location }} />;
   
-  // 👑 GOD MODE: ONLY PROADMIN bypasses all restrictions now
-  if (user.role === 'PROADMIN') {
-      return <>{children}</>;
+  // 👑 GOD MODE: ONLY PROADMIN bypasses all restrictions
+  if (user.role === 'PROADMIN') return <>{children}</>;
+
+  // 🚨 FOOLPROOF DASHBOARD BLOCKER
+  // If a Field Agent tries to load the main dashboard ("/"), kick them to "/landing"
+  if (location.pathname === '/' && (user.role === 'Driver' || user.role === 'Guide')) {
+      return <Navigate to="/landing" replace />;
   }
 
-  // 🚫 If the route has specific allowed roles and the user isn't one of them, bounce them to the dashboard
+  // 🚫 Specific Role Checking
   if (allowedRoles && !allowedRoles.includes(user.role)) {
-      return <Navigate to="/" replace />;
+      // If they are rejected, send Field staff to /landing, and Office staff to /
+      return <Navigate to={(user.role === 'Driver' || user.role === 'Guide') ? "/landing" : "/"} replace />;
   }
 
   return <>{children}</>;
@@ -89,27 +96,26 @@ const App: React.FC = () => {
           {/* ======================================================== */}
           <Route path="/login" element={<Login />} />
           <Route path="/passport/:bookingId" element={<ClientPassport />} />
+          
+          {/* 🌟 FIX: Corrected typo from /landin to /landing */}
+          <Route path="/landing" element={<RoleGuard><Landing/></RoleGuard>}/>
       
           {/* ======================================================== */}
           {/* FIELD APP ROUTES (Protected, but NO Sidebar/Header)      */}
           {/* ======================================================== */}
           <Route path="/field-app" element={<RoleGuard><MobileFieldApp /></RoleGuard>} />
-          
-          {/* Only Drivers see the Cockpit dashboard */}
-          <Route path="/driver-cockpit" element={<RoleGuard allowedRoles={['Driver']}><GuideMode /></RoleGuard>} />
-          
-          {/* Only Tour Guides see the Manifest check-in app */}
-          <Route path="/manifest" element={<RoleGuard allowedRoles={['Guide']}><GuideApp /></RoleGuard>} />
+          <Route path="/driver-cockpit" element={<RoleGuard allowedRoles={['Driver', 'CEO', 'Operations']}><GuideMode /></RoleGuard>} />
+          <Route path="/manifest" element={<RoleGuard allowedRoles={['Guide', 'Driver', 'CEO', 'Operations']}><GuideApp /></RoleGuard>} />
 
           {/* ======================================================== */}
           {/* MAIN APP ROUTES (Protected AND includes Sidebar Layout)  */}
           {/* ======================================================== */}
           
-          {/* EVERYONE can see their own dashboard and profile */}
-          <Route path="/" element={<RoleGuard><AppLayout><Dashboard /></AppLayout></RoleGuard>} />
+          {/* 🌟 FIX: Only Office Staff can see the Dashboard */}
+          <Route path="/" element={<RoleGuard allowedRoles={['CEO', 'Operations', 'Finance']}><AppLayout><Dashboard /></AppLayout></RoleGuard>} />
           <Route path="/profile" element={<RoleGuard><AppLayout><Profile /></AppLayout></RoleGuard>} />
 
-          {/* 🏢 OPERATIONS RESTRICTIONS (Added CEO) */}
+          {/* 🏢 OPERATIONS RESTRICTIONS */}
           <Route path="/ops-hub" element={<RoleGuard allowedRoles={['Operations', 'CEO']}><AppLayout><OpsHub /></AppLayout></RoleGuard>} /> 
           <Route path="/operations" element={<RoleGuard allowedRoles={['Operations', 'CEO']}><AppLayout><TourOperations /></AppLayout></RoleGuard>} />
           <Route path="/tour-operations" element={<RoleGuard allowedRoles={['Operations', 'CEO']}><AppLayout><TourOperations /></AppLayout></RoleGuard>} />
@@ -117,28 +123,26 @@ const App: React.FC = () => {
           <Route path="/suppliers" element={<RoleGuard allowedRoles={['Operations', 'Finance', 'CEO']}><AppLayout><SupplierPortal /></AppLayout></RoleGuard>} />
           <Route path="/communications" element={<RoleGuard allowedRoles={['Operations', 'CEO']}><AppLayout><Communications /></AppLayout></RoleGuard>} />
 
-          {/* 💰 FINANCE RESTRICTIONS (Added CEO) */}
+          {/* 💰 FINANCE RESTRICTIONS */}
           <Route path="/finance-hub" element={<RoleGuard allowedRoles={['Finance', 'CEO']}><AppLayout><FinanceHub /></AppLayout></RoleGuard>} />
           <Route path="/booking" element={<RoleGuard allowedRoles={['Finance', 'Operations', 'CEO']}><AppLayout><BookingEngine /></AppLayout></RoleGuard>} />
           <Route path="/expenses" element={<RoleGuard allowedRoles={['Finance', 'Operations', 'CEO']}><AppLayout><Expenses /></AppLayout></RoleGuard>} />
           <Route path="/invoices" element={<RoleGuard allowedRoles={['Finance', 'CEO']}><AppLayout><Invoices /></AppLayout></RoleGuard>} />
           <Route path="/finance-ledger" element={<RoleGuard allowedRoles={['Finance', 'CEO']}><AppLayout><FinanceLedger /></AppLayout></RoleGuard>} />
-          <Route path="/payroll" element={<RoleGuard allowedRoles={['Finance', 'CEO']}><AppLayout><Payroll /></AppLayout></RoleGuard>} />
-
-          {/* 🤖 AI HUB RESTRICTIONS (Added CEO) */}
+<Route path="/payroll" element={<RoleGuard allowedRoles={['Finance', 'CEO']}><AppLayout><Payroll /></AppLayout></RoleGuard>} />
+          {/* 🤖 AI HUB RESTRICTIONS */}
           <Route path="/ai-hub" element={<RoleGuard allowedRoles={['Operations', 'Finance', 'CEO']}><AppLayout><AIHub /></AppLayout></RoleGuard>} />
           <Route path="/smartsave" element={<RoleGuard allowedRoles={['Finance', 'CEO']}><AppLayout><SmartSave /></AppLayout></RoleGuard>} />
           <Route path="/smartroute" element={<RoleGuard allowedRoles={['Operations', 'CEO']}><AppLayout><SmartRoute /></AppLayout></RoleGuard>} />
           <Route path="/smartyield" element={<RoleGuard allowedRoles={['Finance', 'Operations', 'CEO']}><AppLayout><SmartYield /></AppLayout></RoleGuard>} />
           <Route path="/smartmatch" element={<RoleGuard allowedRoles={['Operations', 'CEO']}><AppLayout><SmartMatch /></AppLayout></RoleGuard>} />
 
-          {/* ⚙️ ADMIN & IT RESTRICTIONS (Added CEO) */}
+          {/* ⚙️ ADMIN & IT RESTRICTIONS */}
           <Route path="/admin-hub" element={<RoleGuard allowedRoles={['Finance', 'Operations', 'CEO']}><AppLayout><AdminHub /></AppLayout></RoleGuard>} />
           <Route path="/staff" element={<RoleGuard allowedRoles={['Operations', 'Finance', 'CEO']}><AppLayout><StaffManagement /></AppLayout></RoleGuard>} />
           <Route path="/settings" element={<RoleGuard allowedRoles={['Operations', 'CEO']}><AppLayout><Settings /></AppLayout></RoleGuard>} />
           <Route path="/subscription" element={<RoleGuard allowedRoles={['Finance', 'CEO']}><AppLayout><Subscription /></AppLayout></RoleGuard>} />
           
-          {/* AuditLog is restricted to CEO and PROADMIN */}
           <Route path="/auditlog" element={<RoleGuard allowedRoles={['CEO']}><AppLayout><AuditLog /></AppLayout></RoleGuard>} /> 
           
           {/* Fallback Route */}
