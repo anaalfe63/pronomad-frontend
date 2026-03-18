@@ -33,7 +33,7 @@ interface TenantContextType {
   initializing: boolean; 
   login: (loginData: { loginName: string; loginPin: string }) => Promise<void>;
   logout: () => void;
-  updateUser: (updates: Partial<TenantData>) => void; // 🌟 NEW: The function to update state live
+  updateUser: (updates: Partial<TenantData>) => void; 
 }
 
 const TenantContext = createContext<TenantContextType | undefined>(undefined);
@@ -109,7 +109,6 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setUser(formattedUser);
   };
 
-  // 🌟 NEW: This function lets Settings.tsx update the user state instantly
   const updateUser = (updates: Partial<TenantData>) => {
     setUser(prev => {
         if (!prev) return prev;
@@ -135,14 +134,17 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         const savedUsername = localStorage.getItem('pronomad_user_username');
         const savedUserStr = localStorage.getItem('pronomad_user');
 
+        let cachedUser: any = null;
+
         if (!subId) { 
           setInitializing(false); 
           return; 
         }
 
-        // If we have a fully saved user in local storage, use it immediately for fast load
+        // 🌟 CACHE CAPTURE: Save the local storage user so we can fall back to it
         if (savedUserStr) {
-            setUser(JSON.parse(savedUserStr));
+            cachedUser = JSON.parse(savedUserStr);
+            setUser(cachedUser);
         }
 
         // Then fetch fresh data in the background
@@ -163,7 +165,7 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         const daysRemaining = calculateDaysRemaining(expiryStr);
         const rawPlan = (subData.plan || 'basic').toLowerCase().trim();
         
-        setUser({
+        const freshUser = {
           subscriberId: subData.id,
           fullName: savedName || subData.fullName || subData.full_name,
           username: savedUsername || subData.username || subData.email,
@@ -177,16 +179,20 @@ export const TenantProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           email: subData.email || '',
           status: subData.status || 'active',
           
-          prefix: settings?.system_prefix || 'PND',
-          currency: settings?.currency || 'GHS',
-          companyLogo: settings?.company_logo || '',
-          companyName: settings?.company_name || 'Pronomad Travels',
-          taxRate: Number(settings?.tax_rate || 0),
-          themeColor: settings?.theme_color || '#0d9488',
-          address: settings?.address || '',
-          supportEmail: settings?.support_email || ''
-        });
+          // 🌟 THE FIX: Chain of command logic -> Database OR Cache OR Default
+          prefix: settings?.system_prefix || cachedUser?.prefix || 'PND',
+          currency: settings?.currency || cachedUser?.currency || 'GHS',
+          companyLogo: settings?.company_logo || cachedUser?.companyLogo || '',
+          companyName: settings?.company_name || cachedUser?.companyName || 'Pronomad Travels',
+          taxRate: Number(settings?.tax_rate ?? cachedUser?.taxRate ?? 0),
+          themeColor: settings?.theme_color || cachedUser?.themeColor || '#0d9488',
+          address: settings?.address || cachedUser?.address || '',
+          supportEmail: settings?.support_email || cachedUser?.supportEmail || ''
+        };
 
+        // Push the final protected state
+        setUser(freshUser as TenantData);
+        localStorage.setItem('pronomad_user', JSON.stringify(freshUser));
         setInitializing(false);
       } catch (err) {
         console.error("Auth Init Error:", err);

@@ -4,13 +4,13 @@ import {
   Menu, X, LayoutDashboard, User, LogOut, Clock, 
   Users, ChevronRight, ShieldAlert, Activity, 
   UserPlus, MessageSquare, FileText, Coffee, Bus,
-  Receipt, Navigation, Ticket, Map
+  Receipt, Navigation, Ticket, Map, ClipboardList, PieChart, BedDouble, Utensils
 } from 'lucide-react';
 import { useTenant } from '../contexts/TenantContext';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 
-interface PassengerData { id: string | number; first_name: string; last_name: string; phone?: string; seat_number?: string; boarded: boolean; dietary_reqs?: string; notes?: string; trip_id?: string | number; }
+interface PassengerData { id: string | number; first_name: string; last_name: string; phone?: string; seat_number?: string; boarded: boolean; dietary_reqs?: string; dietary_needs?: string; notes?: string; trip_id?: string | number; room_preference?: string; requested_roommate?: string; }
 interface TripData { id: string | number; title: string; trip_ref: string; status: string; logistics?: any; itinerary?: any[]; }
 
 const GuideApp: React.FC = () => {
@@ -22,32 +22,28 @@ const GuideApp: React.FC = () => {
   const [passengers, setPassengers] = useState<PassengerData[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // 🌟 NEW: Tab Navigation State for Guides
+  const [activeTab, setActiveTab] = useState<'manifest' | 'itinerary' | 'insights'>('manifest');
+
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [filter, setFilter] = useState<'all' | 'missing' | 'boarded'>('all');
 
-  // 🌟 NEW: Live Routing States
   const [pickupLocation, setPickupLocation] = useState('');
   const [destination, setDestination] = useState('');
 
-  // --- MODAL STATES ---
   const [selectedPax, setSelectedPax] = useState<PassengerData | null>(null);
   
-  // Walk-In State
   const [showAddWalkIn, setShowAddWalkIn] = useState(false);
   const [walkInForm, setWalkInForm] = useState({ firstName: '', lastName: '', phone: '' });
   const [isAddingWalkIn, setIsAddingWalkIn] = useState(false);
 
-  // Expense Logger State
   const [showExpenseLogger, setShowExpenseLogger] = useState(false);
   const [expenseAmount, setExpenseAmount] = useState<string>('');
   const [expenseType, setExpenseType] = useState<'Meal' | 'Ticket' | 'Fuel' | 'Misc'>('Meal');
   const [expenseDesc, setExpenseDesc] = useState<string>('');
   const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
 
-  // =====================================================================
-  // 1. FETCH CLOUD MANIFEST & ITINERARY
-  // =====================================================================
   useEffect(() => {
     const fetchManifest = async () => {
       if (!user?.subscriberId || !user?.fullName) return;
@@ -58,7 +54,6 @@ const GuideApp: React.FC = () => {
           if (myTrip) {
             setActiveTrip(myTrip);
             
-            // 🌟 Auto-fill the Pickup Point from the Database Itinerary
             const firstStop = myTrip.itinerary?.[0]?.location;
             if (firstStop) {
                 setPickupLocation(firstStop);
@@ -75,9 +70,6 @@ const GuideApp: React.FC = () => {
     fetchManifest();
   }, [user]);
 
-  // =====================================================================
-  // 2. REAL-TIME ACTIONS
-  // =====================================================================
   const toggleCheckIn = async (paxId: string | number, currentStatus: boolean, e: React.MouseEvent) => {
     e.stopPropagation(); 
     setPassengers(prev => prev.map(p => p.id === paxId ? { ...p, boarded: !currentStatus } : p));
@@ -99,13 +91,8 @@ const GuideApp: React.FC = () => {
       setIsSubmittingExpense(true);
       try {
           await supabase.from('expenses').insert([{ 
-              subscriber_id: user.subscriberId, 
-              submitter: user.fullName || 'Field Agent', 
-              category: expenseType, 
-              description: expenseDesc || `Field Log - ${activeTrip?.title}`, 
-              amount: Number(expenseAmount), 
-              status: 'Pending', 
-              date: new Date().toISOString() 
+              subscriber_id: user.subscriberId, submitter: user.fullName || 'Field Agent', category: expenseType, 
+              description: expenseDesc || `Field Log - ${activeTrip?.title}`, amount: Number(expenseAmount), status: 'Pending', date: new Date().toISOString() 
           }]);
           alert("Expense sent to Finance Ledger!"); 
           setShowExpenseLogger(false); setExpenseAmount(''); setExpenseDesc('');
@@ -123,14 +110,10 @@ const GuideApp: React.FC = () => {
       } catch (e) { alert("SOS Failed. Please call Base."); }
   };
 
-  // 🌟 NEW: Launch Full Google Maps GPS Route
   const startGPSNavigation = () => {
       if (!destination) return alert("Please enter a destination to start routing.");
-      
-      // Use official Google Maps direction API format. If pickup is empty, it uses live device location.
       const originParam = pickupLocation ? `&origin=${encodeURIComponent(pickupLocation)}` : '';
       const destParam = `&destination=${encodeURIComponent(destination)}`;
-      
       window.open(`https://www.google.com/maps/dir/?api=1${originParam}${destParam}`, '_blank');
   };
 
@@ -140,10 +123,22 @@ const GuideApp: React.FC = () => {
   const totalPax = passengers.length; const boardedPax = passengers.filter(p => p.boarded).length; const missingPax = passengers.filter(p => !p.boarded);
   const filteredPassengers = passengers.filter(p => { const fullName = `${p.first_name} ${p.last_name}`.toLowerCase(); const matchesSearch = fullName.includes(searchQuery.toLowerCase()); if (filter === 'missing') return matchesSearch && !p.boarded; if (filter === 'boarded') return matchesSearch && p.boarded; return matchesSearch; });
 
+  // 🌟 NEW: Calculate Group Insights automatically
+  const dietarySummary = passengers.reduce((acc: any, pax) => {
+      const diet = pax.dietary_needs || pax.dietary_reqs || 'None';
+      if (diet !== 'None' && diet !== '') { acc[diet] = (acc[diet] || 0) + 1; }
+      return acc;
+  }, {});
+
+  const roomSummary = passengers.reduce((acc: any, pax) => {
+      const room = pax.room_preference || 'Standard';
+      acc[room] = (acc[room] || 0) + 1;
+      return acc;
+  }, {});
+
   return (
     <div className="max-w-md mx-auto bg-slate-50 min-h-screen relative overflow-hidden font-sans pb-24 shadow-2xl border-x border-slate-100">
       
-      {/* 🛠 SIDEBAR OVERLAY */}
       {isSidebarOpen && (
         <div className="fixed inset-0 z-[100] flex max-w-md mx-auto">
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)}></div>
@@ -189,91 +184,185 @@ const GuideApp: React.FC = () => {
          <ActionButton icon={<ShieldAlert className="text-red-500" size={20}/>} label="SOS" onClick={triggerSOS} />
       </div>
 
-      {/* 🗺️ LIVE ROUTING WIDGET */}
+      {/* 🌟 NEW: SMART TAB SYSTEM */}
       <div className="px-4 mt-6 relative z-0">
-        <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
-            <div className="flex items-center gap-2 mb-4">
-                <Map size={18} style={{ color: APP_COLOR }} />
-                <h4 className="font-black text-slate-800">Live GPS Routing</h4>
-            </div>
-
-            <div className="relative border-l-2 border-dashed border-slate-200 ml-3 pl-6 space-y-4">
-                {/* Pickup Point */}
-                <div className="relative">
-                    <div className="absolute -left-[31px] top-1/2 -translate-y-1/2 w-4 h-4 bg-white border-2 rounded-full" style={{ borderColor: APP_COLOR }}></div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pickup Point</label>
-                    <input 
-                        type="text" 
-                        value={pickupLocation}
-                        onChange={(e) => setPickupLocation(e.target.value)}
-                        placeholder="Leave blank for live GPS..."
-                        className="w-full bg-slate-50 border border-slate-100 text-slate-800 text-sm font-bold p-3 rounded-xl outline-none focus:ring-2 transition-all mt-1"
-                        style={{ '--tw-ring-color': `${APP_COLOR}50` } as any}
-                    />
-                </div>
-
-                {/* Destination Point */}
-                <div className="relative">
-                    <div className="absolute -left-[31px] top-1/2 -translate-y-1/2 w-4 h-4 bg-white border-2 border-slate-800 rounded-full"></div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Destination</label>
-                    <input 
-                        type="text" 
-                        value={destination}
-                        onChange={(e) => setDestination(e.target.value)}
-                        placeholder="Enter destination..."
-                        className="w-full bg-slate-50 border border-slate-100 text-slate-800 text-sm font-bold p-3 rounded-xl outline-none focus:ring-2 transition-all mt-1"
-                        style={{ '--tw-ring-color': `${APP_COLOR}50` } as any}
-                    />
-                </div>
-            </div>
-
-            <button 
-                onClick={startGPSNavigation}
-                disabled={!destination}
-                className="w-full mt-6 text-white font-black py-4 rounded-xl shadow-lg hover:brightness-110 transition-all active:scale-95 disabled:opacity-50 disabled:grayscale flex items-center justify-center gap-2"
-                style={{ backgroundColor: APP_COLOR }}
-            >
-                <Navigation size={18} className="fill-white"/> Start Navigation
-            </button>
-        </div>
+          <div className="flex p-1 bg-slate-200/50 rounded-2xl border border-slate-200/50 backdrop-blur-sm">
+              <button onClick={() => setActiveTab('manifest')} className={`flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-1.5 ${activeTab === 'manifest' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                  <Users size={14}/> Manifest
+              </button>
+              <button onClick={() => setActiveTab('itinerary')} className={`flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-1.5 ${activeTab === 'itinerary' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                  <ClipboardList size={14}/> Schedule
+              </button>
+              <button onClick={() => setActiveTab('insights')} className={`flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-1.5 ${activeTab === 'insights' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                  <PieChart size={14}/> Insights
+              </button>
+          </div>
       </div>
 
-      {/* 🔍 SEARCH & FILTERS */}
-      <div className="p-4 mt-2 space-y-4 relative z-0">
-        <div className="bg-white rounded-2xl shadow-sm p-2 flex items-center gap-2 border border-slate-200">
-          <Search size={20} className="text-slate-400 ml-2" />
-          <input type="text" placeholder="Search manifest..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full p-2 outline-none text-sm font-bold text-slate-800 bg-transparent"/>
-        </div>
-        <div className="flex justify-between items-center">
-            <div className="flex gap-2">
-                <FilterButton label="All" active={filter === 'all'} onClick={() => setFilter('all')} />
-                <FilterButton label="Missing" active={filter === 'missing'} onClick={() => setFilter('missing')} badge={missingPax.length} />
-            </div>
-            {filter === 'missing' && missingPax.length > 0 && (<button className="flex items-center gap-1.5 bg-blue-50 text-blue-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-100 transition-colors animate-fade-in"><MessageSquare size={14}/> Ping All</button>)}
-        </div>
-      </div>
-
-      {/* 👥 THE MANIFEST LIST */}
-      <div className="px-4 space-y-3 relative z-0">
-        {filteredPassengers.length === 0 ? (
-             <div className="text-center py-10 bg-white rounded-[2rem] border border-slate-100"><Users size={32} className="text-slate-300 mx-auto mb-3" /><p className="text-slate-500 font-bold text-sm">No passengers found.</p></div>
-        ) : (
-            filteredPassengers.map((pax) => (
-              <div key={pax.id} onClick={() => setSelectedPax(pax)} className={`p-4 rounded-3xl border-2 transition-all active:scale-95 cursor-pointer flex justify-between items-center ${pax.boarded ? 'bg-white border-emerald-100 opacity-70' : 'bg-white border-white shadow-xl shadow-slate-200/50'}`}>
-                <div className="flex items-center gap-4">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg font-black ${pax.boarded ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>{pax.first_name.charAt(0)}</div>
-                  <div>
-                    <h3 className={`font-black text-lg ${pax.boarded ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{pax.first_name} {pax.last_name}</h3>
-                    <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-0.5">{pax.seat_number ? `Seat ${pax.seat_number}` : 'Any Seat'} {pax.dietary_reqs && `• 🍎 Alert`}</p>
+      {/* ================================================================= */}
+      {/* TAB 1: MANIFEST VIEW (Original Default View) */}
+      {/* ================================================================= */}
+      {activeTab === 'manifest' && (
+        <div className="animate-in slide-in-from-left-4 fade-in duration-300">
+            {/* 🗺️ LIVE ROUTING WIDGET (Kept inside Manifest so Guide can direct driver) */}
+            <div className="px-4 mt-4 relative z-0">
+              <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-200">
+                  <div className="flex items-center gap-2 mb-4">
+                      <Map size={18} style={{ color: APP_COLOR }} />
+                      <h4 className="font-black text-slate-800">Live GPS Routing</h4>
                   </div>
-                </div>
-                <button onClick={(e) => toggleCheckIn(pax.id, !!pax.boarded, e)} className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-colors shadow-sm ${pax.boarded ? 'bg-emerald-500 text-white' : 'bg-slate-50 border-2 border-slate-200 text-slate-300 hover:border-emerald-500 hover:text-emerald-500'}`}>
-                    <CheckCircle size={24} />
-                </button>
+                  <div className="relative border-l-2 border-dashed border-slate-200 ml-3 pl-6 space-y-4">
+                      <div className="relative">
+                          <div className="absolute -left-[31px] top-1/2 -translate-y-1/2 w-4 h-4 bg-white border-2 rounded-full" style={{ borderColor: APP_COLOR }}></div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pickup Point</label>
+                          <input type="text" value={pickupLocation} onChange={(e) => setPickupLocation(e.target.value)} placeholder="Leave blank for live GPS..." className="w-full bg-slate-50 border border-slate-100 text-slate-800 text-sm font-bold p-3 rounded-xl outline-none focus:ring-2 transition-all mt-1" style={{ '--tw-ring-color': `${APP_COLOR}50` } as any} />
+                      </div>
+                      <div className="relative">
+                          <div className="absolute -left-[31px] top-1/2 -translate-y-1/2 w-4 h-4 bg-white border-2 border-slate-800 rounded-full"></div>
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Destination</label>
+                          <input type="text" value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="Enter destination..." className="w-full bg-slate-50 border border-slate-100 text-slate-800 text-sm font-bold p-3 rounded-xl outline-none focus:ring-2 transition-all mt-1" style={{ '--tw-ring-color': `${APP_COLOR}50` } as any} />
+                      </div>
+                  </div>
+                  <button onClick={startGPSNavigation} disabled={!destination} className="w-full mt-6 text-white font-black py-4 rounded-xl shadow-lg hover:brightness-110 transition-all active:scale-95 disabled:opacity-50 disabled:grayscale flex items-center justify-center gap-2" style={{ backgroundColor: APP_COLOR }}>
+                      <Navigation size={18} className="fill-white"/> Start Navigation
+                  </button>
               </div>
-            ))
-        )}
-      </div>
+            </div>
+
+            {/* 🔍 SEARCH & FILTERS */}
+            <div className="p-4 mt-2 space-y-4 relative z-0">
+              <div className="bg-white rounded-2xl shadow-sm p-2 flex items-center gap-2 border border-slate-200">
+                <Search size={20} className="text-slate-400 ml-2" />
+                <input type="text" placeholder="Search manifest..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full p-2 outline-none text-sm font-bold text-slate-800 bg-transparent"/>
+              </div>
+              <div className="flex justify-between items-center">
+                  <div className="flex gap-2">
+                      <FilterButton label="All" active={filter === 'all'} onClick={() => setFilter('all')} />
+                      <FilterButton label="Missing" active={filter === 'missing'} onClick={() => setFilter('missing')} badge={missingPax.length} />
+                  </div>
+                  {filter === 'missing' && missingPax.length > 0 && (<button className="flex items-center gap-1.5 bg-blue-50 text-blue-600 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-100 transition-colors animate-fade-in"><MessageSquare size={14}/> Ping All</button>)}
+              </div>
+            </div>
+
+            {/* 👥 THE MANIFEST LIST */}
+            <div className="px-4 space-y-3 relative z-0">
+              {filteredPassengers.length === 0 ? (
+                  <div className="text-center py-10 bg-white rounded-[2rem] border border-slate-100"><Users size={32} className="text-slate-300 mx-auto mb-3" /><p className="text-slate-500 font-bold text-sm">No passengers found.</p></div>
+              ) : (
+                  filteredPassengers.map((pax) => (
+                    <div key={pax.id} onClick={() => setSelectedPax(pax)} className={`p-4 rounded-3xl border-2 transition-all active:scale-95 cursor-pointer flex justify-between items-center ${pax.boarded ? 'bg-white border-emerald-100 opacity-70' : 'bg-white border-white shadow-xl shadow-slate-200/50'}`}>
+                      <div className="flex items-center gap-4">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg font-black ${pax.boarded ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}`}>{pax.first_name.charAt(0)}</div>
+                        <div>
+                          <h3 className={`font-black text-lg ${pax.boarded ? 'text-slate-400 line-through' : 'text-slate-800'}`}>{pax.first_name} {pax.last_name}</h3>
+                          <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest mt-0.5">{pax.seat_number ? `Seat ${pax.seat_number}` : 'Any Seat'} {(pax.dietary_reqs || pax.dietary_needs) && `• 🍎 Alert`}</p>
+                        </div>
+                      </div>
+                      <button onClick={(e) => toggleCheckIn(pax.id, !!pax.boarded, e)} className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-colors shadow-sm ${pax.boarded ? 'bg-emerald-500 text-white' : 'bg-slate-50 border-2 border-slate-200 text-slate-300 hover:border-emerald-500 hover:text-emerald-500'}`}>
+                          <CheckCircle size={24} />
+                      </button>
+                    </div>
+                  ))
+              )}
+            </div>
+        </div>
+      )}
+
+      {/* ================================================================= */}
+      {/* TAB 2: ITINERARY / SCHEDULE VIEW */}
+      {/* ================================================================= */}
+      {activeTab === 'itinerary' && (
+         <div className="px-4 mt-6 space-y-4 animate-in fade-in slide-in-from-right-4 duration-300">
+            {(!activeTrip.itinerary || activeTrip.itinerary.length === 0) ? (
+                <div className="text-center py-16 bg-white rounded-[2rem] border border-slate-100">
+                    <ClipboardList size={32} className="mx-auto text-slate-300 mb-3" />
+                    <p className="text-slate-500 font-bold text-sm">No itinerary loaded for this trip.</p>
+                </div>
+            ) : (
+                activeTrip.itinerary.map((step, index) => (
+                    <div key={index} className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex gap-4 relative overflow-hidden">
+                        <div className="absolute left-0 top-0 bottom-0 w-1.5" style={{ backgroundColor: APP_COLOR }}></div>
+                        <div className="text-center shrink-0 w-12 pt-1">
+                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Day {step.day}</p>
+                            <p className="text-sm font-black text-slate-800 mt-1">{step.time || 'TBD'}</p>
+                        </div>
+                        <div className="flex-1 border-l border-slate-100 pl-4">
+                            <h4 className="font-black text-slate-900 text-base">{step.title || 'Scheduled Activity'}</h4>
+                            {step.location && <p className="text-xs text-slate-500 flex items-start gap-1 mt-1.5 font-bold"><MapPin size={14} className="shrink-0 text-slate-400 mt-0.5"/> {step.location}</p>}
+                            {step.meals && <p className="text-[10px] text-orange-600 flex items-start gap-1 mt-2 font-black uppercase tracking-widest bg-orange-50 w-fit px-2 py-1 rounded-lg"><Utensils size={12} className="shrink-0 mt-0.5"/> {step.meals}</p>}
+                            {step.notes && (
+                                <div className="mt-3 bg-slate-50 p-3 rounded-xl text-xs font-medium text-slate-600 border border-slate-100 leading-snug">
+                                    <span className="font-black text-slate-800 block mb-1">Guide Notes:</span>
+                                    {step.notes}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                ))
+            )}
+         </div>
+      )}
+
+      {/* ================================================================= */}
+      {/* TAB 3: GROUP INSIGHTS (DIETARY & ROOMING) */}
+      {/* ================================================================= */}
+      {activeTab === 'insights' && (
+         <div className="px-4 mt-6 space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+            
+            {/* Dietary Needs Widget */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                <h3 className="font-black text-slate-800 flex items-center gap-2 mb-4 border-b border-slate-50 pb-3"><Coffee size={18} className="text-orange-500"/> Dietary Requirements</h3>
+                {Object.keys(dietarySummary).length === 0 ? (
+                    <p className="text-sm text-slate-500 font-bold">No special dietary needs reported.</p>
+                ) : (
+                    <div className="space-y-3">
+                        {Object.entries(dietarySummary).map(([diet, count]) => (
+                            <div key={diet} className="flex justify-between items-center bg-orange-50/50 p-3 rounded-xl border border-orange-100/50">
+                                <span className="font-bold text-sm text-orange-900">{diet}</span>
+                                <span className="w-8 h-8 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center font-black text-sm">{String(count)}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* Rooming List Widget */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                <h3 className="font-black text-slate-800 flex items-center gap-2 mb-4 border-b border-slate-50 pb-3"><BedDouble size={18} className="text-purple-500"/> Rooming Summary</h3>
+                {Object.keys(roomSummary).length === 0 ? (
+                    <p className="text-sm text-slate-500 font-bold">No room preferences reported.</p>
+                ) : (
+                    <div className="space-y-3">
+                        {Object.entries(roomSummary).map(([room, count]) => (
+                            <div key={room} className="flex justify-between items-center bg-purple-50/50 p-3 rounded-xl border border-purple-100/50">
+                                <span className="font-bold text-sm text-purple-900">{room}</span>
+                                <span className="w-8 h-8 rounded-full bg-purple-100 text-purple-600 flex items-center justify-center font-black text-sm">{String(count)}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </div>
+
+            {/* Vendor / Supplier Widget (Reads from Trip Logistics) */}
+            {activeTrip.logistics?.vendors && activeTrip.logistics.vendors.length > 0 && (
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                    <h3 className="font-black text-slate-800 flex items-center gap-2 mb-4 border-b border-slate-50 pb-3"><ShieldAlert size={18} className="text-blue-500"/> Assigned Vendors</h3>
+                    <div className="space-y-3">
+                        {activeTrip.logistics.vendors.map((vendor: any, idx: number) => (
+                            <div key={idx} className="flex justify-between items-center bg-blue-50/50 p-3 rounded-xl border border-blue-100/50">
+                                <div>
+                                    <span className="text-[9px] font-black uppercase text-blue-400 block tracking-widest">{vendor.category}</span>
+                                    <span className="font-bold text-sm text-blue-900">{vendor.name}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+         </div>
+      )}
+
 
       {/* =====================================================================
           🚀 MODALS (Deep-Dive, Walk-In, Expense Logger)
@@ -287,7 +376,7 @@ const GuideApp: React.FC = () => {
                  <div className="flex justify-between items-start mb-6"><div><span className="px-3 py-1 bg-slate-100 text-slate-500 text-[10px] font-black uppercase tracking-widest rounded-full">Digital Ticket</span><h2 className="text-3xl font-black text-slate-900 mt-3 leading-tight">{selectedPax.first_name} <br/>{selectedPax.last_name}</h2></div><button onClick={() => setSelectedPax(null)} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:bg-slate-200"><X size={20}/></button></div>
                  <div className="space-y-4 mb-8">
                      {selectedPax.phone && (<div className="flex items-center gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100"><div className="p-3 bg-white rounded-xl shadow-sm text-blue-500"><Phone size={20}/></div><div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Contact</p><p className="font-bold text-slate-800">{selectedPax.phone}</p></div><a href={`tel:${selectedPax.phone}`} className="ml-auto px-4 py-2 bg-blue-500 text-white rounded-xl text-xs font-bold shadow-md">Call</a></div>)}
-                     {selectedPax.dietary_reqs && (<div className="flex items-center gap-4 p-4 bg-orange-50 rounded-2xl border border-orange-100 text-orange-800"><div className="p-3 bg-white rounded-xl shadow-sm text-orange-500"><Coffee size={20}/></div><div><p className="text-[10px] font-black uppercase tracking-widest opacity-70">Dietary Alert</p><p className="font-bold">{selectedPax.dietary_reqs}</p></div></div>)}
+                     {(selectedPax.dietary_reqs || selectedPax.dietary_needs) && (<div className="flex items-center gap-4 p-4 bg-orange-50 rounded-2xl border border-orange-100 text-orange-800"><div className="p-3 bg-white rounded-xl shadow-sm text-orange-500"><Coffee size={20}/></div><div><p className="text-[10px] font-black uppercase tracking-widest opacity-70">Dietary Alert</p><p className="font-bold">{selectedPax.dietary_reqs || selectedPax.dietary_needs}</p></div></div>)}
                      {selectedPax.notes && (<div className="flex items-start gap-4 p-4 bg-slate-50 rounded-2xl border border-slate-100"><div className="p-3 bg-white rounded-xl shadow-sm text-slate-500"><FileText size={20}/></div><div><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Guide Notes</p><p className="font-bold text-sm text-slate-700 leading-snug mt-1">{selectedPax.notes}</p></div></div>)}
                  </div>
                  <button onClick={(e) => { toggleCheckIn(selectedPax.id, !!selectedPax.boarded, e); setSelectedPax(null); }} className={`w-full py-5 rounded-[2rem] font-black text-lg transition-all shadow-xl ${selectedPax.boarded ? 'bg-slate-100 text-slate-500' : 'text-white'}`} style={selectedPax.boarded ? {} : { backgroundColor: APP_COLOR }}>{selectedPax.boarded ? 'Undo Check-in' : 'Confirm Boarding'}</button>

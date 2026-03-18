@@ -6,7 +6,7 @@ import {
   Users, CheckCircle, Clock, MapPin, Send, Plus, X, Pencil, Save, Wallet,
   Navigation, CloudUpload, RefreshCw, BedDouble, Utensils, 
   HeartPulse, Briefcase, Search, UserCheck, Trash2, Globe, ListPlus,
-  CloudOff
+  CloudOff, ChevronUp, ChevronDown
 } from 'lucide-react';
 
 // =========================================================================
@@ -70,6 +70,9 @@ interface SyncAction {
 const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
   const APP_COLOR = user?.themeColor || '#0d9488';
   const BASE_CURRENCY = user?.currency || 'GHS';
+
+  // 🌟 SECURITY: Check if user has permission to delete trips
+  const canDeleteTrip = ['Finance', 'Operations', 'CEO', 'PROADMIN'].includes(user?.role);
 
   const [trips, setTrips] = useState<Trip[]>([]);
   const [suppliersDb, setSuppliersDb] = useState<any[]>([]);
@@ -332,7 +335,7 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
           marketing_data: trip.marketing_data || {},
           financials: trip.financials || {},
           terms: trip.terms || {},
-          logistics: trip.logistics || {},
+          logistics: trip.logistics || { vendors: [] },
           itinerary: trip.itinerary || [],
           transport_modes: trip.transport_modes || ['Bus']
       });
@@ -366,9 +369,24 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
       }));
   };
 
+  const moveItineraryStep = (index: number, direction: 'up' | 'down') => {
+      const newItinerary = [...(tripForm.itinerary || [])];
+      if (direction === 'up' && index > 0) {
+          const temp = newItinerary[index];
+          newItinerary[index] = newItinerary[index - 1];
+          newItinerary[index - 1] = temp;
+      } else if (direction === 'down' && index < newItinerary.length - 1) {
+          const temp = newItinerary[index];
+          newItinerary[index] = newItinerary[index + 1];
+          newItinerary[index + 1] = temp;
+      }
+      setTripForm(prev => ({ ...prev, itinerary: newItinerary }));
+  };
+
   const filteredTrips = trips.filter(t => t.title?.toLowerCase().includes(searchTerm.toLowerCase()) || t.trip_ref?.toLowerCase().includes(searchTerm.toLowerCase()));
 
-  // 🌟 RESTORED ADMIN MAIN RENDER FUNCTION 🌟
+  const supplierCategories = Array.from(new Set(suppliersDb.map(s => s.category || 'Other')));
+
   return (
     <div className="animate-fade-in pb-20">
       
@@ -420,7 +438,10 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                       <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-[0.1em] ${trip.status === 'Dispatched' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                         {trip.status}
                       </span>
-                      <button onClick={() => handleDeleteTrip(trip.id, trip.title)} className="text-slate-300 hover:text-red-500 transition-colors p-2" title="Delete Trip"><Trash2 size={18}/></button>
+                      {/* 🌟 SECURITY FIX: Only allow specific roles to delete */}
+                      {canDeleteTrip && (
+                          <button onClick={() => handleDeleteTrip(trip.id, trip.title)} className="text-slate-300 hover:text-red-500 transition-colors p-2" title="Delete Trip"><Trash2 size={18}/></button>
+                      )}
                   </div>
 
                   <div className="p-6 flex-1">
@@ -543,52 +564,150 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                          </div>
                      )}
 
-                     {/* TAB: LOGISTICS */}
+                     {/* 🌟 UPGRADED TAB: LOGISTICS & SUPPLIERS */}
                      {editTab === 'logistics' && (
                          <div className="space-y-6">
                             <h3 className="text-xl font-black text-slate-800 mb-6 border-b pb-2">Vendors, Fleet & Staff</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <div className="space-y-4">
+                            
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                {/* STAFF ASSIGNMENTS */}
+                                <div className="space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                                    <h4 className="font-black text-slate-700 mb-2 flex items-center gap-2"><UserCheck size={16}/> Field Team</h4>
                                     <div>
                                         <label className="text-[10px] font-black text-slate-500 ml-2 mb-1 block uppercase">Assigned Driver</label>
-                                        <select value={tripForm.logistics?.driver || ''} onChange={e => setTripForm({...tripForm, logistics: {...tripForm.logistics, driver: e.target.value}})} className="w-full bg-slate-50 border p-3 rounded-xl outline-none font-bold text-sm">
-                                            <option value="">Unassigned</option>{staffDb.filter(s => s.role === 'Driver').map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                                        <select value={tripForm.logistics?.driver || ''} onChange={e => setTripForm({...tripForm, logistics: {...tripForm.logistics, driver: e.target.value}})} className="w-full bg-white border p-3 rounded-xl outline-none font-bold text-sm shadow-sm">
+                                            <option value="">Unassigned</option>
+                                            {staffDb.filter(s => s.role === 'Driver').map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
                                         </select>
                                     </div>
                                     <div>
                                         <label className="text-[10px] font-black text-slate-500 ml-2 mb-1 block uppercase">Assigned Guide</label>
-                                        <select value={tripForm.logistics?.guide || ''} onChange={e => setTripForm({...tripForm, logistics: {...tripForm.logistics, guide: e.target.value}})} className="w-full bg-slate-50 border p-3 rounded-xl outline-none font-bold text-sm">
-                                            <option value="">Unassigned</option>{staffDb.filter(s => s.role === 'Guide').map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                                        <select value={tripForm.logistics?.guide || ''} onChange={e => setTripForm({...tripForm, logistics: {...tripForm.logistics, guide: e.target.value}})} className="w-full bg-white border p-3 rounded-xl outline-none font-bold text-sm shadow-sm">
+                                            <option value="">Unassigned</option>
+                                            {staffDb.filter(s => s.role === 'Guide').map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
                                         </select>
                                     </div>
+                                </div>
+
+                                {/* SUPPLIER ASSIGNMENTS (Dynamic Engine) */}
+                                <div className="space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-100">
+                                    <h4 className="font-black text-slate-700 mb-2 flex items-center gap-2"><Briefcase size={16}/> External Vendors</h4>
+                                    
+                                    <div className="space-y-2 mb-2">
+                                        {(tripForm.logistics?.vendors || []).map((vendor: any, idx: number) => (
+                                            <div key={idx} className="flex justify-between items-center bg-white p-3 rounded-xl border border-slate-200 shadow-sm group">
+                                                <div>
+                                                    <span className="text-[9px] font-black uppercase text-slate-400 block">{vendor.category}</span>
+                                                    <span className="font-bold text-sm text-slate-800 leading-tight">{vendor.name}</span>
+                                                </div>
+                                                <button onClick={() => {
+                                                    const newVendors = [...tripForm.logistics.vendors];
+                                                    newVendors.splice(idx, 1);
+                                                    setTripForm({...tripForm, logistics: {...tripForm.logistics, vendors: newVendors}});
+                                                }} className="text-slate-300 hover:text-red-500 transition-colors p-1"><X size={16}/></button>
+                                            </div>
+                                        ))}
+                                    </div>
+
                                     <div>
+                                        <select 
+                                            value=""
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                if (!val) return;
+                                                const selectedSup = suppliersDb.find(s => String(s.id) === val);
+                                                if (selectedSup) {
+                                                    const currentVendors = tripForm.logistics?.vendors || [];
+                                                    if (!currentVendors.find((v:any) => v.id === selectedSup.id)) {
+                                                        setTripForm({
+                                                            ...tripForm, 
+                                                            logistics: {
+                                                                ...tripForm.logistics, 
+                                                                vendors: [...currentVendors, { id: selectedSup.id, name: selectedSup.name, category: selectedSup.category || 'Vendor' }]
+                                                            }
+                                                        });
+                                                    }
+                                                }
+                                            }}
+                                            className="w-full bg-white border border-dashed border-teal-300 p-3 rounded-xl outline-none font-bold text-sm shadow-sm cursor-pointer hover:bg-teal-50 transition-colors"
+                                            style={{ color: APP_COLOR, borderColor: APP_COLOR }}
+                                        >
+                                            <option value="">+ Assign Vendor / Supplier</option>
+                                            {supplierCategories.map(cat => (
+                                                <optgroup key={cat} label={cat}>
+                                                    {suppliersDb.filter(s => (s.category || 'Other') === cat).map(s => (
+                                                        <option key={s.id} value={s.id}>{s.name} {s.location ? `(${s.location})` : ''}</option>
+                                                    ))}
+                                                </optgroup>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="pt-2">
                                         <label className="text-[10px] font-black text-slate-500 ml-2 mb-1 block uppercase">Vehicle / Flight Detail</label>
-                                        <input type="text" value={tripForm.logistics?.vehicleDetail || ''} onChange={e => setTripForm({...tripForm, logistics: {...tripForm.logistics, vehicleDetail: e.target.value}})} className="w-full bg-slate-50 border p-3 rounded-xl outline-none font-bold text-sm font-mono"/>
+                                        <input type="text" placeholder="e.g. Bus Plate # / Flight No." value={tripForm.logistics?.vehicleDetail || ''} onChange={e => setTripForm({...tripForm, logistics: {...tripForm.logistics, vehicleDetail: e.target.value}})} className="w-full bg-white border p-3 rounded-xl outline-none font-bold text-sm font-mono shadow-sm"/>
                                     </div>
                                 </div>
                             </div>
                          </div>
                      )}
 
-                     {/* TAB: ITINERARY */}
+                     {/* 🌟 UPGRADED TAB: ITINERARY */}
                      {editTab === 'itinerary' && (
                          <div className="space-y-6">
-                            <h3 className="text-xl font-black text-slate-800 mb-6 border-b pb-2">Daily Itinerary</h3>
+                            <h3 className="text-xl font-black text-slate-800 mb-6 border-b pb-2">Daily Itinerary & Activities</h3>
+                            
                             <div className="space-y-4">
-                                {tripForm.itinerary?.map((step) => (
-                                    <div key={step.id} className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex flex-col md:flex-row gap-4 relative pr-10">
-                                        <div className="w-16"><label className="text-[10px] font-black uppercase text-slate-400">Day</label><input type="number" value={step.day} onChange={e => handleUpdateItinerary(step.id, 'day', Number(e.target.value))} className="w-full p-2 bg-white rounded-lg border outline-none font-bold text-center"/></div>
-                                        <div className="w-28"><label className="text-[10px] font-black uppercase text-slate-400">Time</label><input type="time" value={step.time} onChange={e => handleUpdateItinerary(step.id, 'time', e.target.value)} className="w-full p-2 bg-white rounded-lg border outline-none text-sm"/></div>
-                                        <div className="flex-1"><label className="text-[10px] font-black uppercase text-slate-400">Title</label><input type="text" value={step.title} onChange={e => handleUpdateItinerary(step.id, 'title', e.target.value)} className="w-full p-2 bg-white rounded-lg border outline-none text-sm font-bold"/></div>
-                                        <div className="flex-1"><label className="text-[10px] font-black uppercase text-slate-400">Location</label><input type="text" value={step.location} onChange={e => handleUpdateItinerary(step.id, 'location', e.target.value)} className="w-full p-2 bg-white rounded-lg border outline-none text-sm"/></div>
+                                {tripForm.itinerary?.map((step, index) => (
+                                    <div key={step.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 flex flex-col gap-4 relative pr-16 shadow-sm group hover:border-slate-300 transition-all">
                                         
-                                        {tripForm.itinerary!.length > 1 && (
-                                            <button onClick={() => setTripForm(prev => ({...prev, itinerary: prev.itinerary?.filter(s => s.id !== step.id)}))} className="absolute top-1/2 -translate-y-1/2 right-4 text-slate-300 hover:text-red-500"><X size={16}/></button>
-                                        )}
+                                        {/* Drag & Drop / Reordering Controls */}
+                                        <div className="absolute right-4 top-1/2 -translate-y-1/2 flex flex-col gap-1 opacity-50 group-hover:opacity-100 transition-opacity">
+                                            <button onClick={() => moveItineraryStep(index, 'up')} disabled={index === 0} className="p-1.5 bg-white rounded-lg shadow-sm border text-slate-500 hover:text-slate-900 disabled:opacity-30 disabled:cursor-not-allowed"><ChevronUp size={16}/></button>
+                                            <button onClick={() => moveItineraryStep(index, 'down')} disabled={index === (tripForm.itinerary?.length || 0) - 1} className="p-1.5 bg-white rounded-lg shadow-sm border text-slate-500 hover:text-slate-900 disabled:opacity-30 disabled:cursor-not-allowed"><ChevronDown size={16}/></button>
+                                            
+                                            {tripForm.itinerary!.length > 1 && (
+                                                <button onClick={() => setTripForm(prev => ({...prev, itinerary: prev.itinerary?.filter(s => s.id !== step.id)}))} className="p-1.5 mt-2 bg-red-50 text-red-500 rounded-lg border border-red-100 hover:bg-red-500 hover:text-white transition-colors">
+                                                    <Trash2 size={16}/>
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        <div className="flex flex-col md:flex-row gap-4">
+                                            <div className="w-full md:w-20">
+                                                <label className="text-[10px] font-black uppercase text-slate-400">Day</label>
+                                                <input type="number" value={step.day} onChange={e => handleUpdateItinerary(step.id, 'day', Number(e.target.value))} className="w-full p-3 bg-white rounded-xl border outline-none font-black text-center text-lg"/>
+                                            </div>
+                                            <div className="w-full md:w-32">
+                                                <label className="text-[10px] font-black uppercase text-slate-400">Time</label>
+                                                <input type="time" value={step.time} onChange={e => handleUpdateItinerary(step.id, 'time', e.target.value)} className="w-full p-3 bg-white rounded-xl border outline-none text-sm font-bold"/>
+                                            </div>
+                                            <div className="flex-1">
+                                                <label className="text-[10px] font-black uppercase text-slate-400">Activity Title</label>
+                                                <input type="text" placeholder="e.g. Arrival & Check-in" value={step.title} onChange={e => handleUpdateItinerary(step.id, 'title', e.target.value)} className="w-full p-3 bg-white rounded-xl border outline-none text-sm font-bold"/>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex flex-col md:flex-row gap-4">
+                                            <div className="flex-1">
+                                                <label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1"><MapPin size={10}/> Location</label>
+                                                <input type="text" placeholder="e.g. Kotoka International Airport" value={step.location} onChange={e => handleUpdateItinerary(step.id, 'location', e.target.value)} className="w-full p-3 bg-white rounded-xl border outline-none text-sm font-medium"/>
+                                            </div>
+                                            <div className="flex-1">
+                                                <label className="text-[10px] font-black uppercase text-slate-400 flex items-center gap-1"><Utensils size={10}/> Included Meals</label>
+                                                <input type="text" placeholder="e.g. Breakfast, Dinner" value={step.meals} onChange={e => handleUpdateItinerary(step.id, 'meals', e.target.value)} className="w-full p-3 bg-white rounded-xl border outline-none text-sm font-medium text-orange-700"/>
+                                            </div>
+                                        </div>
+                                        
+                                        <div>
+                                            <label className="text-[10px] font-black uppercase text-slate-400">Key Activities / Guide Notes</label>
+                                            <textarea rows={2} placeholder="e.g. Remember to collect passports for hotel check-in..." value={step.notes} onChange={e => handleUpdateItinerary(step.id, 'notes', e.target.value)} className="w-full p-3 bg-white rounded-xl border outline-none text-sm"></textarea>
+                                        </div>
                                     </div>
                                 ))}
-                                <button onClick={() => setTripForm(prev => ({...prev, itinerary: [...(prev.itinerary || []), { id: Date.now(), day: 1, time: '', title: '', location: '', notes: '' }]}))} className="w-full py-3 border-2 border-dashed border-teal-300 text-teal-600 rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-teal-50" style={{ color: APP_COLOR, borderColor: APP_COLOR }}>
-                                    <Plus size={16}/> Add Step
+                                
+                                <button onClick={() => setTripForm(prev => ({...prev, itinerary: [...(prev.itinerary || []), { id: Date.now(), day: 1, time: '08:00', title: '', location: '', meals: '', notes: '' }]}))} className="w-full py-4 border-2 border-dashed border-teal-300 text-teal-600 rounded-3xl font-black text-sm uppercase tracking-widest flex items-center justify-center gap-2 hover:bg-teal-50 transition-colors" style={{ color: APP_COLOR, borderColor: APP_COLOR }}>
+                                    <Plus size={18}/> Add New Itinerary Step
                                 </button>
                             </div>
                          </div>
@@ -598,9 +717,9 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
               </div>
 
               {/* Modal Footer */}
-              <div className="p-6 border-t bg-slate-50 flex justify-end">
-                  <button onClick={handleSaveMasterTrip} className="text-white px-8 py-4 rounded-2xl font-black shadow-xl hover:scale-105 active:scale-95 transition-all flex items-center gap-2" style={{ backgroundColor: APP_COLOR }}>
-                      <Save size={20}/> Save Changes
+              <div className="p-6 border-t bg-slate-50 flex justify-end rounded-b-[3rem]">
+                  <button onClick={handleSaveMasterTrip} className="text-white px-10 py-5 rounded-2xl font-black text-lg shadow-xl hover:scale-105 active:scale-95 transition-all flex items-center gap-3" style={{ backgroundColor: APP_COLOR }}>
+                      <Save size={22}/> Save Master Profile
                   </button>
               </div>
            </div>
