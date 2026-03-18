@@ -6,7 +6,7 @@ import {
   Users, CheckCircle, Clock, MapPin, Send, Plus, X, Pencil, Save, Wallet,
   Navigation, CloudUpload, RefreshCw, BedDouble, Utensils, 
   HeartPulse, Briefcase, Search, UserCheck, Trash2, Globe, ListPlus,
-  CloudOff, ChevronUp, ChevronDown
+  CloudOff, ChevronUp, ChevronDown, Link, AlertCircle, LinkIcon
 } from 'lucide-react';
 
 // =========================================================================
@@ -480,9 +480,24 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                       <button onClick={() => handleOpenManifest(trip)} className="flex-1 text-white py-3.5 rounded-xl font-black text-xs uppercase tracking-widest transition-all flex items-center justify-center gap-2" style={{ backgroundColor: APP_COLOR }}>
                         <Users size={16}/> Manifest
                       </button>
+                      
+                      {/* 🌟 NEW SHARE BUTTON */}
+                      <button 
+                        onClick={() => {
+                            const url = `${window.location.origin}/book/${trip.id}`;
+                            navigator.clipboard.writeText(url);
+                            alert('Booking Link copied to clipboard!\n\n' + url);
+                        }} 
+                        className="w-14 bg-white border border-slate-200 text-slate-600 rounded-xl flex items-center justify-center hover:bg-slate-100 transition-all shadow-sm" 
+                        title="Copy Client Booking Link"
+                      >
+                        <Link size={18}/>
+                      </button>
+                      
                       <button onClick={() => openMasterEditor(trip)} className="w-14 bg-white border border-slate-200 text-slate-600 rounded-xl flex items-center justify-center hover:bg-slate-100 transition-all shadow-sm" title="Edit Full Trip Profile">
                         <Pencil size={18}/>
                       </button>
+                      
                       {trip.status !== 'Dispatched' && (
                         <button onClick={() => handleUpdateTripStatus(trip.id, 'Dispatched')} className="w-14 bg-slate-900 text-white rounded-xl flex items-center justify-center hover:bg-slate-800 transition-all shadow-md" title="Dispatch Trip">
                           <Send size={18}/>
@@ -758,48 +773,88 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                           <th className="px-6 py-4 text-center">Actions</th>
                        </tr>
                     </thead>
-                    <tbody>
-                       {manifestData.map((pax) => (
-                         <tr key={pax.id} className={`group shadow-sm transition-all ${pax.is_lead ? 'bg-slate-50 ring-1 ring-slate-200' : 'bg-white border-y border-slate-50 hover:bg-slate-50'}`}>
-                            <td className="px-6 py-5 text-center rounded-l-[2rem]">
-                               <button onClick={() => handleToggleBoarding(pax)} className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${pax.boarded ? 'text-white shadow-lg' : 'bg-slate-50 text-slate-200 border-2 border-dashed border-slate-200 hover:border-teal-200'}`} style={pax.boarded ? { backgroundColor: APP_COLOR } : {}}><CheckCircle size={22}/></button>
-                            </td>
-                            <td className="px-6 py-5">
-                               <div className="flex items-center gap-4">
-                                  <div className={`w-12 h-12 rounded-full flex items-center justify-center font-black text-xs ${pax.is_lead ? 'text-white shadow-md' : 'bg-slate-100 text-slate-400'}`} style={pax.is_lead ? { backgroundColor: APP_COLOR } : {}}>{pax.first_name?.[0] || '?'}{pax.last_name?.[0] || '?'}</div>
-                                  <div>
-                                    <div className="font-black text-slate-800 text-lg flex items-center gap-2">{pax.title || 'Mr'} {pax.first_name} {pax.last_name} {pax.is_lead && <span className="text-[8px] bg-slate-900 text-white px-2 py-0.5 rounded-full uppercase tracking-wider">Lead</span>}</div>
-                                    <div className="text-[10px] text-slate-400 font-black uppercase tracking-widest flex items-center gap-2">
-                                        <span>{pax.phone || 'No Phone'}</span> • <span>{pax.email || 'No Email'}</span>
+                    {/* Inside TourOperations.tsx, locate the Manifest table body and replace the <tbody> with this: */}
+
+                        <tbody>
+                        {manifestData.map((pax) => {
+                            // Check if payment is pending verification
+                            const isPending = pax.payment_status?.includes('Pending');
+
+                            return (
+                            <tr key={pax.id} className={`group shadow-sm transition-all ${pax.is_lead ? 'bg-slate-50 ring-1 ring-slate-200' : 'bg-white border-y border-slate-50 hover:bg-slate-50'}`}>
+                                <td className="px-6 py-5 text-center rounded-l-[2rem]">
+                                    <button onClick={() => handleToggleBoarding(pax)} className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${pax.boarded ? 'text-white shadow-lg' : 'bg-slate-50 text-slate-200 border-2 border-dashed border-slate-200 hover:border-teal-200'}`} style={pax.boarded ? { backgroundColor: APP_COLOR } : {}}><CheckCircle size={22}/></button>
+                                </td>
+                                <td className="px-6 py-5">
+                                    <div className="flex items-center gap-4">
+                                        <div className={`w-12 h-12 rounded-full flex items-center justify-center font-black text-xs ${pax.is_lead ? 'text-white shadow-md' : 'bg-slate-100 text-slate-400'}`} style={pax.is_lead ? { backgroundColor: APP_COLOR } : {}}>{pax.first_name?.[0] || '?'}{pax.last_name?.[0] || '?'}</div>
+                                        <div>
+                                        <div className="font-black text-slate-800 text-lg flex items-center gap-2">{pax.title || 'Mr'} {pax.first_name} {pax.last_name} {pax.is_lead && <span className="text-[8px] bg-slate-900 text-white px-2 py-0.5 rounded-full uppercase tracking-wider">Lead</span>}</div>
+                                        <div className="text-[10px] text-slate-400 font-black uppercase tracking-widest flex items-center gap-2">
+                                            <span>{pax.phone || 'No Phone'}</span> • <span>{pax.email || 'No Email'}</span>
+                                        </div>
+                                        </div>
                                     </div>
-                                  </div>
-                               </div>
-                            </td>
-                            <td className="px-6 py-5">
-                               <div className="space-y-1">
-                                  <div className="flex items-center gap-2 text-slate-700 font-bold text-sm"><BedDouble size={14} className="text-purple-500"/> {pax.room_preference || 'Standard'}</div>
-                                  <div className="text-[9px] font-black text-slate-400 uppercase bg-slate-100 w-fit px-2 py-0.5 rounded-md">Partner: <span className="text-slate-800">{pax.requested_roommate || 'Unassigned'}</span></div>
-                               </div>
-                            </td>
-                            <td className="px-6 py-5">
-                               <div className="flex flex-col gap-2">
-                                  <div className={`flex items-center gap-2 px-2 py-1 rounded-lg w-fit text-[10px] font-black uppercase ${pax.dietary_needs && pax.dietary_needs !== 'None' ? 'bg-orange-100 text-orange-600' : 'bg-slate-50 text-slate-400'}`}><Utensils size={12}/> {pax.dietary_needs || 'Standard Diet'}</div>
-                                  <div className={`flex items-center gap-2 text-xs font-bold ${pax.medical_info ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}><HeartPulse size={14}/> {pax.medical_info || 'No Medical History'}</div>
-                               </div>
-                            </td>
-                            <td className="px-6 py-5">
-                               <div className="font-black text-slate-900 text-lg leading-none">{BASE_CURRENCY} {Number(pax.amount_paid || 0).toLocaleString()}</div>
-                               <div className={`text-[9px] font-black uppercase tracking-widest mt-1 ${pax.payment_status === 'Full' ? 'text-emerald-500' : 'text-amber-500'}`}>{pax.payment_status || 'Pending'}</div>
-                            </td>
-                            <td className="px-6 py-5 text-center rounded-r-[2rem]">
-                               <div className="flex justify-center gap-2">
-                                   <button onClick={() => { setPaxForm(pax); setIsEditingPax(true); }} className="p-3 bg-white border border-slate-100 rounded-xl shadow-sm text-slate-400 hover:text-blue-600 hover:border-blue-200 transition-all active:scale-95"><Pencil size={16}/></button>
-                                   <button onClick={() => handleDeletePassenger(pax.id, `${pax.first_name} ${pax.last_name}`)} className="p-3 bg-white border border-slate-100 rounded-xl shadow-sm text-slate-400 hover:text-red-600 hover:border-red-200 transition-all active:scale-95"><Trash2 size={16}/></button>
-                               </div>
-                            </td>
-                         </tr>
-                       ))}
-                    </tbody>
+                                </td>
+                                <td className="px-6 py-5">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-2 text-slate-700 font-bold text-sm"><BedDouble size={14} className="text-purple-500"/> {pax.room_preference || 'Standard'}</div>
+                                        <div className="text-[9px] font-black text-slate-400 uppercase bg-slate-100 w-fit px-2 py-0.5 rounded-md">Partner: <span className="text-slate-800">{pax.requested_roommate || 'Unassigned'}</span></div>
+                                    </div>
+                                </td>
+                                <td className="px-6 py-5">
+                                    <div className="flex flex-col gap-2">
+                                        <div className={`flex items-center gap-2 px-2 py-1 rounded-lg w-fit text-[10px] font-black uppercase ${pax.dietary_needs && pax.dietary_needs !== 'None' ? 'bg-orange-100 text-orange-600' : 'bg-slate-50 text-slate-400'}`}><Utensils size={12}/> {pax.dietary_needs || 'Standard Diet'}</div>
+                                        <div className={`flex items-center gap-2 text-xs font-bold ${pax.medical_info ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}><HeartPulse size={14}/> {pax.medical_info || 'No Medical History'}</div>
+                                    </div>
+                                </td>
+                                
+                                {/* 🌟 THE ACCOUNTING & VERIFICATION COLUMN */}
+                                <td className="px-6 py-5">
+                                    <div className="font-black text-slate-900 text-lg leading-none">{BASE_CURRENCY} {Number(pax.amount_paid || 0).toLocaleString()}</div>
+                                    
+                                    {isPending ? (
+                                        <button 
+                                            onClick={async () => {
+                                                if(window.confirm(`Verify funds received for ${pax.first_name}? This secures their seat and unlocks their Passport.`)) {
+                                                    // Update UI Instantly
+                                                    const newStatus = pax.payment_status === 'Pending Full' ? 'Full' : 'Deposit';
+                                                    setManifestData(prev => prev.map(p => p.id === pax.id ? { ...p, payment_status: newStatus } : p));
+                                                    // Update Database
+                                                    await supabase.from('passengers').update({ payment_status: newStatus }).eq('id', pax.id);
+                                                }
+                                            }}
+                                            className="mt-2 bg-amber-100 text-amber-700 hover:bg-amber-500 hover:text-white border border-amber-200 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-1 transition-colors"
+                                        >
+                                            <AlertCircle size={12}/> Verify Funds
+                                        </button>
+                                    ) : (
+                                        <div className={`text-[9px] font-black uppercase tracking-widest mt-1 ${pax.payment_status === 'Full' ? 'text-emerald-500' : 'text-blue-500'}`}>{pax.payment_status}</div>
+                                    )}
+                                </td>
+
+                                {/* 🌟 THE SHARE PASSPORT & ACTIONS COLUMN */}
+                                <td className="px-6 py-5 text-center rounded-r-[2rem]">
+                                    <div className="flex justify-center gap-2">
+                                        <button 
+                                            onClick={() => {
+                                                const url = `${window.location.origin}/passport/${pax.booking_id}`;
+                                                navigator.clipboard.writeText(url);
+                                                alert(`Passport link copied for ${pax.first_name}!\n\n${url}`);
+                                            }} 
+                                            title="Copy Passenger Passport Link"
+                                            className="p-3 bg-slate-900 text-white rounded-xl shadow-sm hover:bg-slate-700 transition-all active:scale-95"
+                                        >
+                                            <LinkIcon size={16}/>
+                                        </button>
+                                        <button onClick={() => { setPaxForm(pax); setIsEditingPax(true); }} className="p-3 bg-white border border-slate-100 rounded-xl shadow-sm text-slate-400 hover:text-blue-600 hover:border-blue-200 transition-all active:scale-95"><Pencil size={16}/></button>
+                                        <button onClick={() => handleDeletePassenger(pax.id, `${pax.first_name} ${pax.last_name}`)} className="p-3 bg-white border border-slate-100 rounded-xl shadow-sm text-slate-400 hover:text-red-600 hover:border-red-200 transition-all active:scale-95"><Trash2 size={16}/></button>
+                                    </div>
+                                </td>
+                            </tr>
+                            );
+                        })}
+                        </tbody>
                  </table>
               </div>
            </div>
@@ -932,7 +987,7 @@ const FieldOperations: React.FC<{ subscriberId: string }> = ({ subscriberId }) =
     );
 };
 
-const Operations: React.FC = () => {
+const TourOperations: React.FC = () => {
   const { user } = useTenant();
   if (!user) return null;
   
@@ -943,4 +998,4 @@ const Operations: React.FC = () => {
   return <AdminOperations user={user} />;
 };
 
-export default Operations;
+export default TourOperations;

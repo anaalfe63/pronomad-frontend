@@ -5,6 +5,7 @@ import { TenantProvider, useTenant } from './contexts/TenantContext';
 // Layout Components
 import Sidebar from './components/Sidebar';
 import TopHeader from './components/TopHeader';
+import PublicBooking from './pages/PublicBooking';
 
 // Hubs
 import OpsHub from './pages/OpsHub';
@@ -96,7 +97,8 @@ const App: React.FC = () => {
           {/* ======================================================== */}
           <Route path="/login" element={<Login />} />
           <Route path="/passport/:bookingId" element={<ClientPassport />} />
-          
+          <Route path="/book/:tripId" element={<PublicBooking />} />
+
           {/* 🌟 FIX: Corrected typo from /landin to /landing */}
           <Route path="/landing" element={<RoleGuard><Landing/></RoleGuard>}/>
       
