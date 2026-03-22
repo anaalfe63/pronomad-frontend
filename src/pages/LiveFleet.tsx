@@ -3,8 +3,8 @@ import { MapContainer, TileLayer, Marker, Popup, useMap, CircleMarker } from 're
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { 
-  AlertTriangle, User, Battery, Navigation, RefreshCw,
-  Gauge, Search, ArrowRight, ShieldAlert, MapPin, Siren, Radio, Maximize, CheckCircle2, Map, Save, X, Flame, ChevronDown, Activity, Users, Clock
+  AlertTriangle, User, Navigation, RefreshCw,
+  Gauge, Search, ArrowRight, ShieldAlert, MapPin, Siren, Radio, Maximize, CheckCircle2, Map, Save, X, Flame, ChevronDown, Activity, Users, Clock, Coffee
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTenant } from '../contexts/TenantContext';
@@ -25,7 +25,6 @@ interface Vehicle {
   lat: number;
   lng: number;
   speed: number;
-  fuel: number;
   location: string;
   status: string;
   tripTitle?: string;
@@ -37,7 +36,7 @@ const MapController: React.FC<{ vehicles: Vehicle[], selectedId: string | number
   const map = useMap();
   useEffect(() => {
     if (selectedId) {
-      const target = vehicles.find(v => v.id === selectedId);
+      const target = vehicles.find(v => String(v.id) === String(selectedId));
       if (target) map.flyTo([target.lat, target.lng], 16, { duration: 1.5 }); 
     } else if (vehicles.length > 0) {
       const bounds = L.latLngBounds(vehicles.map(v => [v.lat, v.lng]));
@@ -45,33 +44,37 @@ const MapController: React.FC<{ vehicles: Vehicle[], selectedId: string | number
     } else {
       map.flyTo(hqLocation, 12, { duration: 1.5 });
     }
-  }, [selectedId, vehicles.length, map, hqLocation]); 
+  }, [selectedId, vehicles, map, hqLocation]); 
   return null;
 };
 
+// 🌟 BULLETPROOF INLINE-STYLED MARKER
 const getMarkerIcon = (vehicle: Vehicle, themeColor: string) => {
   const isSpeeding = vehicle.speed > 100;
   const isIdle = vehicle.isIdle || vehicle.status === 'Standby' || !vehicle.hasGPS;
+  const isResting = vehicle.status === 'Pit Stop';
   
   let colorHex = themeColor;
-  let pulse = '';
+  let pulseHtml = '';
   
   if (isSpeeding) {
       colorHex = '#dc2626'; // Red
-      pulse = '<div class="absolute -inset-2 bg-red-500/40 rounded-full animate-ping"></div>';
+      pulseHtml = `<div style="position: absolute; top: -8px; right: -8px; bottom: -8px; left: -8px; background-color: rgba(220, 38, 38, 0.4); border-radius: 50%; animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;"></div>`;
+  } else if (isResting) {
+      colorHex = '#f59e0b'; // Amber for Pit Stop
   } else if (isIdle) {
-      colorHex = '#94a3b8'; // Slate
+      colorHex = '#94a3b8'; // Slate for idle/no GPS
   }
 
   const html = `
-    <div class="relative flex items-center justify-center w-8 h-8">
-       ${pulse}
-       <div class="w-6 h-6 rounded-full border-2 border-white shadow-lg z-10" style="background-color: ${colorHex}"></div>
+    <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px;">
+       ${pulseHtml}
+       <div style="width: 24px; height: 24px; border-radius: 50%; border: 2px solid white; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); z-index: 10; background-color: ${colorHex};"></div>
     </div>
   `;
 
   return L.divIcon({
-    html, className: 'bg-transparent', iconSize: [32, 32], iconAnchor: [16, 16], popupAnchor: [0, -16]
+    html, className: 'custom-fleet-marker', iconSize: [32, 32], iconAnchor: [16, 16], popupAnchor: [0, -16]
   });
 };
 
@@ -98,10 +101,47 @@ const LiveFleet: React.FC = () => {
   const [heatmapLocations, setHeatmapLocations] = useState<any[]>([]);
   const [showHeatmap, setShowHeatmap] = useState<boolean>(false);
 
-  // 🌟 NEW: Modal States for Driver & Manifest
   const [detailsModal, setDetailsModal] = useState<{ isOpen: boolean; type: 'manifest' | 'driver'; vehicle: Vehicle | null }>({ isOpen: false, type: 'manifest', vehicle: null });
   const [modalPassengers, setModalPassengers] = useState<any[]>([]);
   const [isFetchingDetails, setIsFetchingDetails] = useState(false);
+
+  // 🚨 REAL-TIME SOS LISTENER FOR LIVE FLEET
+  useEffect(() => {
+      if (!user?.subscriberId) return;
+
+      const sosSubscription = supabase
+        .channel('livefleet-sos-alerts')
+        .on('postgres_changes', { 
+            event: 'INSERT', 
+            schema: 'public', 
+            table: 'notifications', 
+            filter: `type=eq.Emergency` 
+        }, (payload) => {
+            if (payload.new.subscriber_id !== user.subscriberId) return;
+
+            const siren = new Audio('https://assets.mixkit.co/active_storage/sfx/995/995-preview.mp3');
+            siren.play().catch(e => console.log('Browser blocked audio', e));
+
+            const emergencyDiv = document.createElement('div');
+            emergencyDiv.innerHTML = `
+                <div style="position:fixed; inset:0; z-index:99999; background:rgba(220, 38, 38, 0.95); backdrop-filter:blur(10px); display:flex; flex-direction:column; align-items:center; justify-content:center; color:white; font-family:sans-serif;">
+                    <h1 style="font-size:5rem; font-weight:900; margin-bottom:1rem; text-transform:uppercase; animation:pulse 1s infinite; text-align: center;">🚨 SOS TRIGGERED 🚨</h1>
+                    <p style="font-size:1.5rem; font-weight:bold; max-width:800px; text-align:center;">${payload.new.message}</p>
+                    <button id="dismiss-sos-fleet" style="margin-top:4rem; padding:1.5rem 4rem; font-size:1.5rem; font-weight:900; background:black; color:white; border:none; border-radius:50px; cursor:pointer; box-shadow: 0 10px 25px rgba(0,0,0,0.5); transition: transform 0.2s;">ACKNOWLEDGE & DISMISS</button>
+                </div>
+            `;
+            document.body.appendChild(emergencyDiv);
+
+            document.getElementById('dismiss-sos-fleet')?.addEventListener('click', () => {
+                document.body.removeChild(emergencyDiv);
+                siren.pause();
+            });
+
+        }).subscribe();
+
+      return () => { supabase.removeChannel(sosSubscription); };
+  }, [user?.subscriberId]);
+
 
   useEffect(() => {
     const fetchHeatmapData = async () => {
@@ -115,7 +155,7 @@ const LiveFleet: React.FC = () => {
     fetchHeatmapData();
   }, [user]);
 
-  // --- SMART POLLING VIA SUPABASE ---
+  // --- INITIAL LOAD & FALLBACK POLLING ---
   useEffect(() => {
     const fetchFleetAndHQ = async () => {
       try {
@@ -144,7 +184,6 @@ const LiveFleet: React.FC = () => {
                     lat: hasLiveGps ? trip.lat : currentHqLat,
                     lng: hasLiveGps ? trip.lng : currentHqLng,
                     speed: trip.current_speed || 0,
-                    fuel: 85, 
                     location: hasLiveGps ? 'Live on Route' : 'Awaiting GPS Signal',
                     status: trip.status || 'Active',
                     tripTitle: trip.title || '',
@@ -161,9 +200,44 @@ const LiveFleet: React.FC = () => {
     };
 
     fetchFleetAndHQ(); 
-    const interval = setInterval(fetchFleetAndHQ, 3000); 
+    const interval = setInterval(fetchFleetAndHQ, 15000); // Relaxed to 15s since we have WebSockets
     return () => clearInterval(interval);
   }, [user]);
+
+  // 🌟 TRUE WEBSOCKETS REAL-TIME GPS TRACKING
+  useEffect(() => {
+     if (!user?.subscriberId) return;
+
+     const fleetChannel = supabase
+       .channel('live-fleet-movement')
+       .on('postgres_changes', {
+           event: 'UPDATE',
+           schema: 'public',
+           table: 'trips',
+           filter: `subscriber_id=eq.${user.subscriberId}`
+       }, (payload) => {
+           setVehicles(prevVehicles => prevVehicles.map(v => {
+               if (String(v.id) === String(payload.new.id)) {
+                   const hasLiveGps = !!(payload.new.lat && payload.new.lng);
+                   return {
+                       ...v,
+                       lat: hasLiveGps ? Number(payload.new.lat) : v.lat,
+                       lng: hasLiveGps ? Number(payload.new.lng) : v.lng,
+                       speed: Number(payload.new.current_speed) || 0,
+                       status: payload.new.status || v.status,
+                       hasGPS: hasLiveGps,
+                       location: hasLiveGps ? 'Live on Route' : v.location,
+                       isIdle: !hasLiveGps || !payload.new.current_speed || payload.new.current_speed === 0
+                   };
+               }
+               return v;
+           }));
+           setLastSync(new Date());
+       }).subscribe();
+
+     return () => { supabase.removeChannel(fleetChannel); };
+  }, [user?.subscriberId]);
+
 
   const filteredVehicles = useMemo(() => {
       let filtered = vehicles;
@@ -179,8 +253,8 @@ const LiveFleet: React.FC = () => {
       return {
           total: vehicles.length,
           speeding: vehicles.filter(v => v.speed > 100).length,
-          lowFuel: vehicles.filter(v => v.fuel < 20).length,
-          active: vehicles.filter(v => v.hasGPS && !v.isIdle).length
+          onBreak: vehicles.filter(v => v.status === 'Pit Stop').length,
+          active: vehicles.filter(v => v.hasGPS && !v.isIdle && v.status !== 'Pit Stop').length
       };
   }, [vehicles]);
 
@@ -194,7 +268,6 @@ const LiveFleet: React.FC = () => {
       window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // 🌟 NEW: Open Details Modal Handler
   const handleOpenDetails = async (v: Vehicle, type: 'manifest' | 'driver') => {
       setDetailsModal({ isOpen: true, type, vehicle: v });
       
@@ -311,7 +384,7 @@ const LiveFleet: React.FC = () => {
 
               {/* LIVE VEHICLE MARKERS */}
               {filteredVehicles.map((v) => (
-                  <Marker key={v.id} position={[v.lat, v.lng]} icon={getMarkerIcon(v, APP_COLOR)}>
+                  <Marker key={v.id} position={[Number(v.lat) || 0, Number(v.lng) || 0]} icon={getMarkerIcon(v, APP_COLOR)}>
                       <Popup className="rounded-3xl shadow-2xl border-none">
                           <div className="p-2 min-w-[240px]">
                               {v.speed > 100 && (
@@ -333,14 +406,16 @@ const LiveFleet: React.FC = () => {
                                       <p className="text-[9px] uppercase font-black text-slate-400 tracking-widest mb-1">Speed</p>
                                       <p className={`font-black text-lg leading-none ${v.speed > 100 ? 'text-red-600' : 'text-slate-800'}`}>{v.speed} <span className="text-[9px] text-slate-400">km/h</span></p>
                                   </div>
-                                  <div className="bg-slate-50 p-3 rounded-xl text-center border border-slate-100">
-                                      <p className="text-[9px] uppercase font-black text-slate-400 tracking-widest mb-1">Fuel Lvl</p>
-                                      <p className={`font-black text-lg leading-none ${v.fuel < 20 ? 'text-orange-500' : 'text-slate-800'}`}>{v.fuel}<span className="text-[9px] text-slate-400">%</span></p>
+                                  
+                                  {/* Replaced Fuel with Dynamic Status Indicator */}
+                                  <div className="bg-slate-50 p-3 rounded-xl text-center border border-slate-100 flex flex-col items-center justify-center">
+                                      <p className="text-[9px] uppercase font-black text-slate-400 tracking-widest mb-1">State</p>
+                                      <p className={`font-black text-sm leading-tight truncate px-1 ${v.status === 'Pit Stop' ? 'text-amber-500' : 'text-emerald-600'}`}>{v.status}</p>
                                   </div>
                               </div>
 
                               <div className="space-y-2">
-                                  {/* 🌟 NEW: Launch local Driver & Manifest Modals */}
+                                  {/* Launch local Driver & Manifest Modals */}
                                   <button onClick={() => handleOpenDetails(v, 'driver')} className="w-full flex items-center justify-between text-xs font-bold text-slate-700 bg-slate-50 hover:bg-slate-100 transition-colors p-3 rounded-xl border border-slate-100">
                                       <span className="flex items-center gap-2"><User size={14}/> {v.driver}</span>
                                       <ArrowRight size={14}/>
@@ -390,13 +465,14 @@ const LiveFleet: React.FC = () => {
                       </div>
                   </div>
 
+                  {/* Replaced Low Fuel with Units on Break */}
                   <div className="bg-white px-6 py-4 rounded-[1.5rem] shadow-sm border border-slate-200 flex items-center gap-4 min-w-[160px]">
-                      <div className={`p-3 rounded-2xl ${kpi.lowFuel > 0 ? 'bg-orange-100 text-orange-600' : 'bg-slate-100 text-slate-500'}`}>
-                          <Battery size={20}/>
+                      <div className={`p-3 rounded-2xl ${kpi.onBreak > 0 ? 'bg-amber-100 text-amber-600' : 'bg-slate-100 text-slate-500'}`}>
+                          <Coffee size={20}/>
                       </div>
                       <div>
-                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Low Fuel</p>
-                          <p className="text-2xl font-black text-slate-800">{kpi.lowFuel}</p>
+                          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">On Break</p>
+                          <p className="text-2xl font-black text-slate-800">{kpi.onBreak}</p>
                       </div>
                   </div>
               </div>
@@ -457,7 +533,7 @@ const LiveFleet: React.FC = () => {
                           key={v.id} 
                           onClick={() => handleSelectVehicle(v.id)}
                           className={`p-6 rounded-[2rem] border-2 transition-all cursor-pointer group bg-white shadow-md hover:-translate-y-1`}
-                          style={selectedVehicleId === v.id ? { borderColor: APP_COLOR, boxShadow: `0 10px 15px -3px ${APP_COLOR}40`, transform: 'scale(1.02)' } : { borderColor: 'transparent' }}
+                          style={selectedVehicleId === String(v.id) ? { borderColor: APP_COLOR, boxShadow: `0 10px 15px -3px ${APP_COLOR}40`, transform: 'scale(1.02)' } : { borderColor: 'transparent' }}
                       >
                           <div className="flex justify-between items-start mb-4">
                               <div>
@@ -467,7 +543,7 @@ const LiveFleet: React.FC = () => {
                               {v.speed > 100 ? (
                                   <span className="px-3 py-1.5 bg-red-100 text-red-600 text-[10px] font-black uppercase tracking-widest rounded-xl flex items-center gap-1 animate-pulse"><AlertTriangle size={12}/> ALERT</span>
                               ) : (
-                                  <span className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-xl ${v.hasGPS ? 'text-white' : 'bg-slate-100 text-slate-500'}`} style={v.hasGPS ? { backgroundColor: APP_COLOR } : {}}>
+                                  <span className={`px-3 py-1.5 text-[10px] font-black uppercase tracking-widest rounded-xl ${v.hasGPS ? 'text-white' : 'bg-slate-100 text-slate-500'}`} style={v.hasGPS ? { backgroundColor: v.status === 'Pit Stop' ? '#f59e0b' : APP_COLOR } : {}}>
                                       {v.hasGPS ? v.status : 'Awaiting GPS'}
                                   </span>
                               )}
@@ -477,7 +553,12 @@ const LiveFleet: React.FC = () => {
                               <div className="flex items-center gap-2 font-bold text-slate-700" onClick={(e) => { e.stopPropagation(); handleOpenDetails(v, 'driver'); }}><User size={16} style={{ color: APP_COLOR }} className="hover:scale-110 transition-transform"/> {v.driver}</div>
                               <div className="flex items-center gap-4">
                                   <span className={`flex items-center gap-1.5 font-black ${v.speed > 100 ? 'text-red-600' : 'text-slate-600'}`}><Gauge size={16}/> {v.speed}</span>
-                                  <span className={`flex items-center gap-1.5 font-black ${v.fuel < 20 ? 'text-orange-500' : 'text-slate-600'}`}><Battery size={16}/> {v.fuel}%</span>
+                                  
+                                  {/* Replaced Fuel with Dynamic Status Indicator */}
+                                  <span className={`flex items-center gap-1.5 font-black ${v.status === 'Pit Stop' ? 'text-amber-500' : 'text-slate-600'}`}>
+                                      {v.status === 'Pit Stop' ? <Coffee size={16}/> : <Activity size={16}/>} 
+                                      {v.status === 'Pit Stop' ? 'On Break' : 'Active'}
+                                  </span>
                               </div>
                           </div>
                       </div>

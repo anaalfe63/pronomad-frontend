@@ -87,7 +87,7 @@ const Settings: React.FC = () => {
       setIsCreatingSubaccount(true);
 
       try {
-         
+          // REMINDER: Move this to an edge function for production!
           const PAYSTACK_SECRET_KEY = "sk_test_removed_for_security";
 
           const response = await fetch('https://api.paystack.co/subaccount', {
@@ -214,6 +214,40 @@ const Settings: React.FC = () => {
                   <div className="md:col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1"><MapPin size={12}/> Official HQ Address (Appears on Invoices)</label><input type="text" value={formData.address || ''} onChange={(e) => setFormData((prev:any) => ({...prev, address: e.target.value}))} className="w-full bg-slate-50 border border-slate-200 p-4 rounded-xl outline-none focus:ring-2 font-medium text-slate-800 transition-all" style={{ '--tw-ring-color': APP_COLOR } as any} placeholder="e.g. 123 Independence Ave, Accra"/></div>
                   <div className="md:col-span-2"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-1"><Globe size={12}/> Public Support Email</label><input type="email" value={formData.support_email || ''} onChange={(e) => setFormData((prev:any) => ({...prev, support_email: e.target.value}))} className="w-full bg-slate-50 border border-slate-200 p-4 rounded-xl outline-none focus:ring-2 font-medium text-slate-800 transition-all" style={{ '--tw-ring-color': APP_COLOR } as any} placeholder="support@company.com"/></div>
                 </div>
+
+                {/* 🌟 NEW HELPLINE SETTINGS */}
+                <div className="bg-slate-50 border border-slate-200 p-6 rounded-3xl mt-8">
+                    <h4 className="font-black text-slate-800 mb-6 border-b border-slate-200 pb-2 flex items-center gap-2">
+                        <Phone size={18} style={{ color: APP_COLOR }}/> Dispatch & Support Numbers
+                    </h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div>
+                            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 block">Customer Support Helpline</label>
+                            <input 
+                                type="tel" 
+                                value={formData.customer_helpline || ''} 
+                                onChange={(e) => setFormData((prev:any) => ({...prev, customer_helpline: e.target.value}))} 
+                                placeholder="+233 24 000 0000" 
+                                className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none focus:ring-2 font-bold text-slate-700 shadow-sm transition-all"
+                                style={{ '--tw-ring-color': APP_COLOR } as any}
+                            />
+                            <p className="text-[10px] text-slate-500 font-medium mt-2">Shown on the Client's Digital Passport.</p>
+                        </div>
+                        <div>
+                            <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 block">HQ Operations Number</label>
+                            <input 
+                                type="tel" 
+                                value={formData.operations_helpline || ''} 
+                                onChange={(e) => setFormData((prev:any) => ({...prev, operations_helpline: e.target.value}))} 
+                                placeholder="+233 20 000 0000" 
+                                className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none focus:ring-2 font-bold text-slate-700 shadow-sm transition-all"
+                                style={{ '--tw-ring-color': APP_COLOR } as any}
+                            />
+                            <p className="text-[10px] text-slate-500 font-medium mt-2">Called when drivers click "Call Base".</p>
+                        </div>
+                    </div>
+                </div>
+
               </div>
             )}
 

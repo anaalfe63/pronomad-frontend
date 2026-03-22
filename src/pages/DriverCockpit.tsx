@@ -5,7 +5,7 @@ import {
   Gauge, ClipboardCheck, Fuel, X, CheckCircle2, 
   Activity, CreditCard, Droplets, ChevronLeft, Map as MapIcon, 
   Send, CloudDownload, WifiOff, Maximize2, Minimize2, CheckSquare, ChevronRight,
-  QrCode, ScanLine, Smartphone
+  QrCode, ScanLine, Smartphone, Coffee, Flag
 } from 'lucide-react';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
@@ -66,9 +66,15 @@ const DriverCockpit: React.FC = () => {
   const [scanFeedback, setScanFeedback] = useState<{ type: 'success' | 'error' | 'warning', message: string } | null>(null);
   const processingScan = useRef(false);
 
+  // 🌟 ROUTING, REST & TIME TRACER STATES
+  const [opsNumber, setOpsNumber] = useState<string>('');
+  const [destination, setDestination] = useState<string>('');
+  const [isOnBreak, setIsOnBreak] = useState<boolean>(false); 
+  const [tripSummary, setTripSummary] = useState<{isOpen: boolean, duration: string, title: string} | null>(null);
+
   // 1. FETCH ALL ASSIGNED TRIPS
   useEffect(() => {
-    const fetchAvailableTrips = async () => {
+    const fetchCockpitData = async () => {
       if (!user?.subscriberId || !user?.fullName) return;
       try {
         const { data: tripData, error } = await supabase
@@ -83,22 +89,56 @@ const DriverCockpit: React.FC = () => {
             setAvailableTrips(tripData);
             if (tripData.length === 1) setCurrentTrip(tripData[0]);
         }
+
+        const { data: settingsData } = await supabase
+            .from('system_settings')
+            .select('operations_helpline')
+            .eq('subscriber_id', user.subscriberId)
+            .maybeSingle();
+
+        if (settingsData?.operations_helpline) {
+            setOpsNumber(settingsData.operations_helpline);
+        }
+
       } catch (e) { console.error("Standby..."); } 
       finally { setLoading(false); }
     };
-    fetchAvailableTrips();
+    fetchCockpitData();
   }, [user]);
 
-  // 2. 🌍 REAL GPS TELEMETRY
+  // 🌟 BULLETPROOF PERSISTENT TIMER LOGIC
+  useEffect(() => {
+    if (currentTrip) {
+        // Hydrate state from LocalStorage so timer survives navigation/reloads
+        const savedTime = localStorage.getItem(`pronomad_trip_time_${currentTrip.id}`);
+        if (savedTime) setElapsedTime(parseInt(savedTime, 10));
+
+        const savedActive = localStorage.getItem(`pronomad_trip_active_${currentTrip.id}`);
+        if (savedActive === 'true') setIsTripActive(true);
+
+        const savedBreak = localStorage.getItem(`pronomad_trip_break_${currentTrip.id}`);
+        if (savedBreak === 'true') setIsOnBreak(true);
+    }
+  }, [currentTrip]);
+
+  // 2. 🌍 REAL GPS TELEMETRY & PERSISTENT TIMER ENGINE
   useEffect(() => {
     if (!currentTrip) return;
     let watchId: number;
     let timerInterval: ReturnType<typeof setInterval>;
 
-    if (isTripActive) {
-      timerInterval = setInterval(() => setElapsedTime(prev => prev + 1), 1000);
+    // Timer that writes to localStorage every second
+    if (isTripActive && !isOnBreak) {
+      timerInterval = setInterval(() => {
+          setElapsedTime(prev => {
+              const newTime = prev + 1;
+              localStorage.setItem(`pronomad_trip_time_${currentTrip.id}`, newTime.toString());
+              return newTime;
+          });
+      }, 1000);
     }
 
+    // GPS Tracker
     watchId = navigator.geolocation.watchPosition(
       async (position) => {
           const { latitude, longitude, speed } = position.coords;
@@ -112,7 +152,7 @@ const DriverCockpit: React.FC = () => {
                   current_speed: realSpeedKmh,
                   last_ping: new Date().toISOString()
               };
-              if (isTripActive) payload.status = 'In Transit';
+              if (isTripActive && !isOnBreak) payload.status = 'In Transit';
               await supabase.from('trips').update(payload).eq('id', currentTrip.id);
           }
       },
@@ -124,24 +164,93 @@ const DriverCockpit: React.FC = () => {
         if (timerInterval) clearInterval(timerInterval);
         if (watchId) navigator.geolocation.clearWatch(watchId);
     };
-  }, [isTripActive, currentTrip]);
+  }, [isTripActive, currentTrip, isOnBreak]);
 
+  // 🌟 TIME FORMATTERS
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
-    const secs = (seconds % 60).toString().padStart(2, '0');
-    return `${mins}:${secs}`;
+    const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+    const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return h === '00' ? `${m}:${s}` : `${h}:${m}:${s}`;
+  };
+
+  const formatDetailedTime = (seconds: number) => {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      if (h > 0) return `${h}h ${m}m`;
+      return `${m} minutes`;
+  };
+
+  // 🌟 NEW: END TRIP & TIME TRACER
+  const handleEndTrip = async () => {
+      if (!currentTrip) return;
+      if (!window.confirm("🏁 END TRIP: Are you sure you have completed this route? This will stop the tracker.")) return;
+      
+      // Stop Timers
+      setIsTripActive(false);
+      setIsOnBreak(false);
+      setIsDriveMode(false);
+      
+      // Clear Persisted State
+      localStorage.removeItem(`pronomad_trip_time_${currentTrip.id}`);
+      localStorage.removeItem(`pronomad_trip_active_${currentTrip.id}`);
+      localStorage.removeItem(`pronomad_trip_break_${currentTrip.id}`);
+
+      // Show Summary Tracer
+      setTripSummary({
+          isOpen: true,
+          duration: formatDetailedTime(elapsedTime),
+          title: currentTrip.title
+      });
+
+      // Update Database
+      try {
+          await supabase.from('trips').update({ status: 'Completed', current_speed: 0 }).eq('id', currentTrip.id);
+      } catch (e) {
+          console.error("Failed to mark trip completed in DB.");
+      }
   };
 
   // 3. 🚨 REAL ACTIONS
   const triggerSOS = async () => {
     if (!window.confirm("🚨 SEND EMERGENCY ALERTS TO HQ? This will notify Operations immediately.")) return;
     try {
-      await supabase.from('notifications').insert([{ subscriber_id: user?.subscriberId, type: 'Emergency', title: '🔴 SOS: DRIVER EMERGENCY', message: `${user?.fullName} has triggered an SOS for Trip: ${currentTrip?.title}`, is_read: false }]);
+      const locationString = currentLocation ? `${currentLocation[0].toFixed(5)}, ${currentLocation[1].toFixed(5)}` : 'Unknown Location';
+      await supabase.from('notifications').insert([{ 
+          subscriber_id: user?.subscriberId, 
+          type: 'Emergency', 
+          title: '🔴 SOS: DRIVER EMERGENCY', 
+          message: `${user?.fullName} has triggered an SOS for Trip: ${currentTrip?.title || 'Unknown'}. GPS Coordinates: ${locationString}`, 
+          is_read: false 
+      }]);
       alert("SOS Broadcast Sent. Help is on the way.");
     } catch (e) { alert("SOS Failed. Please call HQ directly."); }
   };
 
-  const callBase = () => { window.location.href = 'tel:+233244000000'; };
+  const callBase = () => { 
+      if (!opsNumber) {
+          alert("HQ Operations number has not been set by administration.");
+          return;
+      }
+      window.location.href = `tel:${opsNumber}`; 
+  };
+
+  const togglePitStop = async () => {
+      if (!currentTrip) return;
+      const newState = !isOnBreak;
+      setIsOnBreak(newState);
+      localStorage.setItem(`pronomad_trip_break_${currentTrip.id}`, String(newState));
+      
+      try {
+          await supabase.from('trips').update({ status: newState ? 'Pit Stop' : 'In Transit' }).eq('id', currentTrip.id);
+          if (newState) {
+              await supabase.from('notifications').insert([{ 
+                  subscriber_id: user?.subscriberId, type: 'general', title: '☕ Pit Stop Activated', 
+                  message: `${user?.fullName} has safely pulled over for a rest stop on Trip: ${currentTrip.title}.`, is_read: false 
+              }]);
+          }
+      } catch (e) { console.error("Failed to update status"); }
+  };
 
   const handleExpenseSubmit = async () => {
       if (!expenseAmount || !user?.subscriberId) return;
@@ -163,7 +272,12 @@ const DriverCockpit: React.FC = () => {
       setTimeout(() => setOfflineMapStatus('ready'), 3000); 
   };
 
-  // 🌟 QR SCAN PROCESSING ENGINE
+  const startGPSNavigation = () => {
+      if (!destination) return alert("Please enter a destination to start routing.");
+      const originParam = currentLocation ? `&origin=${currentLocation[0]},${currentLocation[1]}` : '';
+      window.open(`https://www.google.com/maps/dir/?api=1${originParam}&destination=${encodeURIComponent(destination)}`, '_blank');
+  };
+
   const handleScan = async (text: string) => {
       if (processingScan.current) return;
       processingScan.current = true;
@@ -177,7 +291,6 @@ const DriverCockpit: React.FC = () => {
           const bookingId = text.replace('pronomad:verify:', '');
           if (!bookingId) throw new Error("Corrupted QR Code.");
 
-          // Look up the passenger on THIS specific trip
           const { data: pax, error } = await supabase
               .from('passengers')
               .select('*')
@@ -190,20 +303,17 @@ const DriverCockpit: React.FC = () => {
               return;
           }
 
-          // Check Payment Verification
           if (pax.payment_status !== 'Full') {
-              setScanFeedback({ type: 'warning', message: `STOP! ${pax.first_name} ${pax.last_name} has an unverified or pending balance. Do not board.` });
+              setScanFeedback({ type: 'warning', message: `STOP! ${pax.first_name} ${pax.last_name} has an unverified balance. Do not board.` });
               new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3').play().catch(()=>console.log('Audio blocked'));
               return;
           }
 
-          // Check if already boarded
           if (pax.boarded) {
               setScanFeedback({ type: 'warning', message: `${pax.first_name} is already checked in.` });
               return;
           }
 
-          // Update Database -> Boarded!
           await supabase.from('passengers').update({ boarded: true }).eq('id', pax.id);
           
           setScanFeedback({ type: 'success', message: `✅ ${pax.first_name} ${pax.last_name} Boarded Successfully!` });
@@ -281,12 +391,14 @@ const DriverCockpit: React.FC = () => {
                   <div className="w-px h-10 bg-slate-200"></div>
                   <div className="text-center">
                       <p className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Tracking</p>
-                      <p className="text-sm font-bold text-slate-800 flex items-center gap-2"><Navigation size={18} className="text-emerald-500 animate-pulse"/> LIVE</p>
+                      <p className={`text-sm font-bold flex items-center gap-2 ${isOnBreak ? 'text-amber-500' : 'text-emerald-500'}`}>
+                          <Navigation size={18} className={!isOnBreak ? "animate-pulse" : ""}/> 
+                          {isOnBreak ? 'PAUSED' : 'LIVE'}
+                      </p>
                   </div>
               </div>
 
               <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-xl p-3 rounded-[2rem] shadow-2xl flex items-center gap-2 border border-white z-10">
-                  {/* Scanner added to Drive Mode Dock */}
                   <DockButton icon={<ScanLine size={22} className="text-blue-500"/>} onClick={() => setShowScanner(true)} />
                   <DockButton icon={<CheckSquare size={22}/>} onClick={() => setShowChecklist(true)} />
                   <DockButton icon={<CreditCard size={22}/>} onClick={() => setShowExpenseLogger(true)} />
@@ -319,8 +431,10 @@ const DriverCockpit: React.FC = () => {
                 <ChevronLeft size={24} />
               </button>
               <div className="bg-white/60 backdrop-blur-md px-6 py-2.5 rounded-full shadow-sm border border-white flex items-center gap-2">
-                  <Signal size={16} className={isTripActive ? 'text-emerald-500 animate-pulse' : 'text-slate-400'}/>
-                  <span className="text-xs font-black uppercase tracking-widest text-slate-700">{isTripActive ? 'GPS Live' : 'Standby'}</span>
+                  <Signal size={16} className={isTripActive && !isOnBreak ? 'text-emerald-500 animate-pulse' : isOnBreak ? 'text-amber-500' : 'text-slate-400'}/>
+                  <span className="text-xs font-black uppercase tracking-widest text-slate-700">
+                      {isTripActive && !isOnBreak ? 'GPS Live' : isOnBreak ? 'Pit Stop' : 'Standby'}
+                  </span>
               </div>
               <div className="w-12 h-12 bg-slate-800 rounded-full flex items-center justify-center text-white font-black shadow-lg" style={{ backgroundColor: APP_COLOR }}>
                 {user?.fullName?.[0]}
@@ -339,7 +453,6 @@ const DriverCockpit: React.FC = () => {
                        </div>
                    </div>
 
-                   {/* 🌟 NEW PROMINENT SCAN & BOARD BUTTON */}
                    <button 
                       onClick={() => setShowScanner(true)}
                       className="w-full bg-slate-900 text-white p-5 rounded-[2rem] shadow-xl flex items-center justify-center gap-3 active:scale-95 transition-all hover:bg-slate-800"
@@ -348,9 +461,8 @@ const DriverCockpit: React.FC = () => {
                       <span className="font-black text-lg">Scan & Board Passengers</span>
                    </button>
 
-                   {/* 🌟 NEW MOBILE FIELD APP REDIRECT BUTTON */}
                    <button 
-                      onClick={() => navigate('/mobile-field')} // Make sure this matches your Route path in App.tsx!
+                      onClick={() => navigate('/mobile-field')}
                       className="w-full bg-blue-50 text-blue-600 p-5 rounded-[2rem] shadow-sm flex items-center justify-center gap-3 active:scale-95 transition-all hover:bg-blue-100 border border-blue-100 mt-4"
                    >
                       <Smartphone size={24} className="text-blue-500"/>
@@ -369,19 +481,45 @@ const DriverCockpit: React.FC = () => {
 
                        <button 
                           onClick={() => {
-                              if (!isTripActive && !checklistComplete) setShowChecklist(true);
-                              else {
-                                  setIsTripActive(!isTripActive);
-                                  if (!isTripActive) setIsDriveMode(true); 
+                              if (!isTripActive && !checklistComplete) {
+                                  setShowChecklist(true);
+                              } else if (!isTripActive) {
+                                  setIsTripActive(true);
+                                  setIsDriveMode(true);
+                                  localStorage.setItem(`pronomad_trip_active_${currentTrip.id}`, 'true');
+                              } else {
+                                  handleEndTrip();
                               }
                           }}
                           className="w-full py-4 rounded-[1.5rem] font-black text-white shadow-lg transition-all flex justify-between items-center px-6 active:scale-95"
                           style={{ backgroundColor: isTripActive ? '#ef4444' : APP_COLOR }}
                        >
                            <span>{isTripActive ? 'End Trip' : (checklistComplete ? 'Start Engine' : 'Run Inspection')}</span>
-                           {isTripActive ? <X size={20}/> : <Send size={20}/>}
+                           {isTripActive ? <Flag size={20}/> : <Send size={20}/>}
                        </button>
                    </div>
+                </div>
+
+                <div className="bg-white p-6 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white mb-4">
+                    <h4 className="font-black text-slate-800 flex items-center gap-2 mb-4"><Navigation size={18} style={{ color: APP_COLOR }}/> Set Destination</h4>
+                    <div className="flex gap-2">
+                        <input 
+                            type="text" 
+                            value={destination}
+                            onChange={(e) => setDestination(e.target.value)}
+                            placeholder="Where to next?"
+                            className="w-full bg-slate-50 border border-slate-100 text-slate-800 text-sm font-bold p-4 rounded-xl outline-none focus:ring-2 transition-all"
+                            style={{ '--tw-ring-color': `${APP_COLOR}50` } as any}
+                        />
+                        <button 
+                            onClick={startGPSNavigation}
+                            disabled={!destination}
+                            className="text-white px-6 rounded-xl font-black shadow-md disabled:opacity-50 active:scale-95 transition-all"
+                            style={{ backgroundColor: APP_COLOR }}
+                        >
+                            GO
+                        </button>
+                    </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -418,19 +556,58 @@ const DriverCockpit: React.FC = () => {
                     <div className="bg-white p-6 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white flex flex-col justify-between">
                         <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Elapsed Time</span>
                         <div className="flex flex-col items-center justify-center flex-1">
-                            <h2 className="text-3xl font-black text-slate-800">{formatTime(elapsedTime)}</h2>
+                            <h2 className={`text-3xl font-black ${isOnBreak ? 'text-amber-500' : 'text-slate-800'}`}>{formatTime(elapsedTime)}</h2>
+                            {isOnBreak && <p className="text-xs font-bold text-amber-500 mt-2 uppercase tracking-widest animate-pulse">Timer Paused</p>}
                         </div>
                     </div>
 
                     <div className="bg-white p-4 rounded-[2rem] shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-white grid grid-cols-2 gap-2">
                         <WidgetButton icon={<CheckSquare size={20}/>} label="Checks" onClick={() => setShowChecklist(true)} active={!checklistComplete}/>
                         <WidgetButton icon={<CreditCard size={20}/>} label="Fuel/Toll" onClick={() => setShowExpenseLogger(true)} />
-                        <WidgetButton icon={<Phone size={20}/>} label="Call Base" onClick={callBase} />
+                        
+                        <WidgetButton 
+                            icon={<Coffee size={20}/>} 
+                            label={isOnBreak ? "Resume" : "Pit Stop"} 
+                            onClick={togglePitStop} 
+                            active={isOnBreak}
+                            bg={isOnBreak ? "bg-amber-50 text-amber-600" : "bg-slate-50"} 
+                        />
+                        
                         <WidgetButton icon={<AlertTriangle size={20} className="text-red-500"/>} label="SOS" bg="bg-red-50" onClick={triggerSOS} />
                     </div>
                 </div>
             </div>
           </>
+      )}
+
+      {/* 🏁 TRIP COMPLETED SUMMARY MODAL */}
+      {tripSummary?.isOpen && (
+          <div className="fixed inset-0 z-[600] flex items-center justify-center p-6 bg-slate-900/80 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-md rounded-[3rem] p-10 shadow-2xl animate-in zoom-in-95 text-center">
+                  <div className="w-20 h-20 bg-emerald-50 text-emerald-500 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
+                      <Flag size={36} className="fill-current"/>
+                  </div>
+                  <h2 className="text-3xl font-black mb-2 text-slate-900">Trip Completed!</h2>
+                  <p className="text-slate-500 text-sm font-medium mb-8">You have successfully ended the route for <strong>{tripSummary.title}</strong>.</p>
+                  
+                  <div className="bg-slate-50 border border-slate-100 rounded-3xl p-6 mb-8 shadow-inner">
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Total Driving Time</p>
+                      <p className="text-4xl font-black text-slate-800">{tripSummary.duration}</p>
+                  </div>
+
+                  <button 
+                      onClick={() => {
+                          setTripSummary(null);
+                          setCurrentTrip(null);
+                          navigate('/landing');
+                      }} 
+                      className="w-full py-5 rounded-[2rem] font-black text-lg transition-all text-white shadow-xl hover:brightness-110 active:scale-95" 
+                      style={{ backgroundColor: APP_COLOR }}
+                  >
+                      Return to Dispatch
+                  </button>
+              </div>
+          </div>
       )}
 
       {/* 🛡️ PRE-TRIP CHECKLIST MODAL */}
@@ -446,7 +623,7 @@ const DriverCockpit: React.FC = () => {
                       <CheckRow label="Brakes responsive" checked={vehicleCheck.brakes} onClick={() => setVehicleCheck({...vehicleCheck, brakes: !vehicleCheck.brakes})} />
                       <CheckRow label="Interior clean" checked={vehicleCheck.cleanliness} onClick={() => setVehicleCheck({...vehicleCheck, cleanliness: !vehicleCheck.cleanliness})} />
                   </div>
-                  <button disabled={!checklistComplete} onClick={() => { setIsTripActive(true); setIsDriveMode(true); setShowChecklist(false); }} className={`w-full py-5 rounded-[2rem] font-black text-lg transition-all ${checklistComplete ? 'text-white shadow-xl shadow-emerald-500/20' : 'bg-slate-100 text-slate-400'}`} style={checklistComplete ? { backgroundColor: APP_COLOR } : {}}>{checklistComplete ? 'START TRIP' : 'COMPLETE CHECKS'}</button>
+                  <button disabled={!checklistComplete} onClick={() => { setIsTripActive(true); setIsDriveMode(true); setShowChecklist(false); if(currentTrip) localStorage.setItem(`pronomad_trip_active_${currentTrip.id}`, 'true'); }} className={`w-full py-5 rounded-[2rem] font-black text-lg transition-all ${checklistComplete ? 'text-white shadow-xl shadow-emerald-500/20' : 'bg-slate-100 text-slate-400'}`} style={checklistComplete ? { backgroundColor: APP_COLOR } : {}}>{checklistComplete ? 'START TRIP' : 'COMPLETE CHECKS'}</button>
                   <button onClick={() => setShowChecklist(false)} className="w-full mt-4 py-3 text-slate-500 font-bold hover:text-slate-800">Cancel</button>
               </div>
           </div>
@@ -490,7 +667,6 @@ const DriverCockpit: React.FC = () => {
                  <button onClick={() => { setShowScanner(false); setScanFeedback(null); }} className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center text-white backdrop-blur-md active:scale-95"><X/></button>
              </div>
 
-             {/* Camera Viewport */}
              <div className="flex-1 relative flex items-center justify-center bg-black">
                  <Scanner 
                     onScan={(result) => handleScan(result[0].rawValue)} 
@@ -498,7 +674,6 @@ const DriverCockpit: React.FC = () => {
                     styles={{ container: { width: '100%', height: '100%' } }}
                  />
                  
-                 {/* Scanner Overlay Target */}
                  <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
                      <div className="w-64 h-64 border-4 border-white/30 rounded-[3rem] relative">
                          <div className="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-emerald-500 rounded-tl-[3rem]"></div>
@@ -509,7 +684,6 @@ const DriverCockpit: React.FC = () => {
                  </div>
              </div>
 
-             {/* Live Feedback Toast */}
              <div className="absolute bottom-10 left-6 right-6">
                  {scanFeedback ? (
                      <div className={`p-6 rounded-[2rem] shadow-2xl flex items-center gap-4 animate-in slide-in-from-bottom-4 zoom-in-95 duration-200
@@ -534,16 +708,16 @@ const DriverCockpit: React.FC = () => {
 };
 
 const DockButton = ({ icon, onClick, active }: any) => (
-    <button onClick={onClick} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all relative ${active ? 'bg-slate-100 text-slate-900' : 'bg-transparent text-white/70 hover:bg-white/10 hover:text-white'}`}>
+    <button onClick={onClick} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all relative ${active ? 'bg-slate-100 text-slate-900' : 'bg-white-900/90 text-white-900/70 hover:bg-blue-900/90 hover:text-white'}`}>
         {icon}
         {active && <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full"></span>}
     </button>
 );
 
 const WidgetButton = ({ icon, label, onClick, bg = "bg-slate-50", active }: any) => (
-    <button onClick={onClick} className={`${bg} rounded-2xl p-4 flex flex-col items-center justify-center gap-2 hover:bg-slate-100 active:scale-95 transition-all relative`}>
+    <button onClick={onClick} className={`w-full ${bg} rounded-2xl p-4 flex flex-col items-center justify-center gap-2 hover:bg-slate-100 active:scale-95 transition-all relative`}>
         {icon}
-        <span className="text-[9px] font-black uppercase text-slate-500">{label}</span>
+        <span className="text-[9px] font-black uppercase text-slate-500 whitespace-nowrap">{label}</span>
         {active && <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>}
     </button>
 );

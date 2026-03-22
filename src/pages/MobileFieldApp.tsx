@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
@@ -6,7 +6,8 @@ import {
   MapPin, Users, Receipt, CheckCircle2, ChevronLeft, Camera, 
   Bus, Clock, Phone, AlertTriangle, Home, Navigation, 
   Activity, CheckSquare, Coffee, ExternalLink, Target, Map,
-  Ticket, Droplets, Fuel, HeartPulse, BedDouble, Utensils
+  Ticket, Droplets, Fuel, HeartPulse, BedDouble, Utensils,
+  Search, Filter // <-- Added Search and Filter icons
 } from 'lucide-react';
 
 interface PassengerData {
@@ -46,11 +47,15 @@ const MobileFieldApp: React.FC = () => {
   const [pickupLocation, setPickupLocation] = useState('');
   const [destination, setDestination] = useState('');
 
-  // 🌟 Expense Form State (Upgraded)
+  // 🌟 Expense Form State
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseDesc, setExpenseDesc] = useState('');
   const [expenseType, setExpenseType] = useState<'Fuel' | 'Meal' | 'Ticket' | 'Misc'>('Fuel');
   const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
+
+  // 🌟 Manifest Search & Sort States
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'status' | 'name_asc' | 'name_desc'>('status');
 
   // =====================================================================
   // 1. FETCH LIVE CLOUD DATA
@@ -146,6 +151,36 @@ const MobileFieldApp: React.FC = () => {
   const openStopGPS = (locationString: string) => {
       window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(locationString)}`, '_blank');
   };
+
+  // =====================================================================
+  // 3. SMART FILTER & SORT ENGINE
+  // =====================================================================
+  const filteredAndSortedPassengers = useMemo(() => {
+      let result = passengers.filter(p => {
+          const fullName = `${p.first_name} ${p.last_name}`.toLowerCase();
+          return fullName.includes(searchQuery.toLowerCase());
+      });
+
+      result.sort((a, b) => {
+          if (sortBy === 'status') {
+              // If status is the same, sort alphabetically
+              if (a.boarded === b.boarded) {
+                  return a.first_name.localeCompare(b.first_name);
+              }
+              // Push unboarded (false) to the top!
+              return a.boarded ? 1 : -1; 
+          }
+          if (sortBy === 'name_asc') {
+              return a.first_name.localeCompare(b.first_name);
+          }
+          if (sortBy === 'name_desc') {
+              return b.first_name.localeCompare(a.first_name);
+          }
+          return 0;
+      });
+
+      return result;
+  }, [passengers, searchQuery, sortBy]);
 
   if (loading) {
     return <div className="min-h-screen bg-slate-50 flex items-center justify-center"><Activity className="text-slate-400 animate-spin" size={40}/></div>;
@@ -284,15 +319,52 @@ const MobileFieldApp: React.FC = () => {
         {/* --- TAB: MANIFEST --- */}
         {myTrip && activeTab === 'manifest' && (
           <div className="space-y-3 animate-in fade-in slide-in-from-right-4">
-            <div className="flex justify-between items-center ml-2 mb-4">
-              <h3 className="font-black text-slate-800 text-lg">Passenger List</h3>
-              <span className="bg-slate-200 text-slate-600 text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full">{passengers.length} Pax</span>
+            
+            {/* SEARCH & SORT HEADER */}
+            <div className="flex flex-col gap-3 mb-4 ml-2 mr-2">
+                <div className="flex justify-between items-center">
+                  <h3 className="font-black text-slate-800 text-lg">Passenger List</h3>
+                  <span className="bg-slate-200 text-slate-600 text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full">{passengers.length} Pax</span>
+                </div>
+
+                <div className="flex gap-2">
+                    <div className="relative flex-1">
+                        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input 
+                            type="text" 
+                            placeholder="Search passengers..." 
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            className="w-full bg-white border border-slate-200 pl-9 pr-4 py-2.5 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 shadow-sm transition-all"
+                            style={{ '--tw-ring-color': `${APP_COLOR}50` } as any}
+                        />
+                    </div>
+                    <div className="relative shrink-0">
+                        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none">
+                            <Filter size={16} />
+                        </div>
+                        <select 
+                            value={sortBy}
+                            onChange={(e) => setSortBy(e.target.value as any)}
+                            className="bg-white border border-slate-200 pl-9 pr-8 py-2.5 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 shadow-sm appearance-none cursor-pointer"
+                            style={{ '--tw-ring-color': `${APP_COLOR}50` } as any}
+                        >
+                            <option value="status">Pending First</option>
+                            <option value="name_asc">Name (A-Z)</option>
+                            <option value="name_desc">Name (Z-A)</option>
+                        </select>
+                    </div>
+                </div>
             </div>
             
-            {passengers.length === 0 ? (
-                 <div className="p-8 text-center bg-white rounded-2xl border border-slate-100"><p className="text-slate-400 font-bold">Manifest is empty.</p></div>
+            {filteredAndSortedPassengers.length === 0 ? (
+                 <div className="p-8 text-center bg-white rounded-2xl border border-slate-100">
+                    <p className="text-slate-400 font-bold">
+                        {searchQuery ? 'No passengers match your search.' : 'Manifest is empty.'}
+                    </p>
+                 </div>
             ) : (
-                passengers.map((pax) => (
+                filteredAndSortedPassengers.map((pax) => (
                   <div key={pax.id} className={`p-5 rounded-3xl shadow-sm border-2 transition-all ${pax.boarded ? 'bg-emerald-50/50 border-emerald-100' : 'bg-white border-transparent shadow-slate-200/50'}`}>
                     <div className="flex justify-between items-start mb-3 border-b border-slate-50 pb-3">
                       <div>
