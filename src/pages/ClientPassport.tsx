@@ -264,12 +264,12 @@ const ClientPassport: React.FC = () => {
           <div className="p-10 border-t border-slate-100 flex flex-col items-center justify-center bg-white rounded-b-[2.5rem]">
             <div className="p-4 border-2 border-dashed border-slate-200 rounded-3xl mb-4 bg-white">
                 <QRCodeSVG 
-                    value={`pronomad:verify:${data.bookingRef}`}
-                    size={140}
-                    level="H" 
-                    fgColor="#0f172a" 
-                    bgColor="transparent"
-                />
+                  value={`pronomad:verify:${bookingId}`}
+                  size={140}
+                  level="H" 
+                  fgColor="#0f172a" 
+                  bgColor="transparent"
+              />
             </div>
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] text-center">Scan at Departure Gate</p>
             <p className="text-[9px] font-bold text-slate-300 mt-1">REF: {data.bookingRef}</p>

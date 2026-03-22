@@ -1,13 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom'; 
 import { 
   Navigation, Phone, AlertTriangle, Signal, 
   Gauge, ClipboardCheck, Fuel, X, CheckCircle2, 
   Activity, CreditCard, Droplets, ChevronLeft, Map as MapIcon, 
-  Send, CloudDownload, WifiOff, Maximize2, Minimize2, CheckSquare, ChevronRight
+  Send, CloudDownload, WifiOff, Maximize2, Minimize2, CheckSquare, ChevronRight,
+  QrCode, ScanLine, Smartphone
 } from 'lucide-react';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
+
+// 📷 QR SCANNER IMPORT
+import { Scanner } from '@yudiel/react-qr-scanner';
 
 // 🗺️ REAL MAP IMPORTS
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
@@ -56,6 +60,11 @@ const DriverCockpit: React.FC = () => {
   const [expenseAmount, setExpenseAmount] = useState<string>('');
   const [expenseType, setExpenseType] = useState<'Fuel' | 'Toll'>('Fuel');
   const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
+
+  // 🌟 SCANNER STATES
+  const [showScanner, setShowScanner] = useState(false);
+  const [scanFeedback, setScanFeedback] = useState<{ type: 'success' | 'error' | 'warning', message: string } | null>(null);
+  const processingScan = useRef(false);
 
   // 1. FETCH ALL ASSIGNED TRIPS
   useEffect(() => {
@@ -154,6 +163,59 @@ const DriverCockpit: React.FC = () => {
       setTimeout(() => setOfflineMapStatus('ready'), 3000); 
   };
 
+  // 🌟 QR SCAN PROCESSING ENGINE
+  const handleScan = async (text: string) => {
+      if (processingScan.current) return;
+      processingScan.current = true;
+      setScanFeedback(null);
+
+      try {
+          if (!text.startsWith('pronomad:verify:')) {
+              throw new Error("Invalid QR Code. Please scan a valid Pronomad Passport.");
+          }
+
+          const bookingId = text.replace('pronomad:verify:', '');
+          if (!bookingId) throw new Error("Corrupted QR Code.");
+
+          // Look up the passenger on THIS specific trip
+          const { data: pax, error } = await supabase
+              .from('passengers')
+              .select('*')
+              .eq('booking_id', bookingId)
+              .eq('trip_id', currentTrip?.id)
+              .single();
+
+          if (error || !pax) {
+              setScanFeedback({ type: 'error', message: "Passenger not found on this manifest!" });
+              return;
+          }
+
+          // Check Payment Verification
+          if (pax.payment_status !== 'Full') {
+              setScanFeedback({ type: 'warning', message: `STOP! ${pax.first_name} ${pax.last_name} has an unverified or pending balance. Do not board.` });
+              new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3').play().catch(()=>console.log('Audio blocked'));
+              return;
+          }
+
+          // Check if already boarded
+          if (pax.boarded) {
+              setScanFeedback({ type: 'warning', message: `${pax.first_name} is already checked in.` });
+              return;
+          }
+
+          // Update Database -> Boarded!
+          await supabase.from('passengers').update({ boarded: true }).eq('id', pax.id);
+          
+          setScanFeedback({ type: 'success', message: `✅ ${pax.first_name} ${pax.last_name} Boarded Successfully!` });
+          new Audio('https://assets.mixkit.co/active_storage/sfx/1435/1435-preview.mp3').play().catch(()=>console.log('Audio blocked'));
+
+      } catch (e: any) {
+          setScanFeedback({ type: 'error', message: e.message });
+      } finally {
+          setTimeout(() => { processingScan.current = false; }, 3000);
+      }
+  };
+
   const defaultCenter: [number, number] = [5.6037, -0.1870]; 
 
   if (loading) return <div className="h-screen bg-[#e5e7eb] flex items-center justify-center"><Activity className="text-slate-400 animate-spin" size={48}/></div>;
@@ -224,6 +286,8 @@ const DriverCockpit: React.FC = () => {
               </div>
 
               <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-xl p-3 rounded-[2rem] shadow-2xl flex items-center gap-2 border border-white z-10">
+                  {/* Scanner added to Drive Mode Dock */}
+                  <DockButton icon={<ScanLine size={22} className="text-blue-500"/>} onClick={() => setShowScanner(true)} />
                   <DockButton icon={<CheckSquare size={22}/>} onClick={() => setShowChecklist(true)} />
                   <DockButton icon={<CreditCard size={22}/>} onClick={() => setShowExpenseLogger(true)} />
                   <DockButton icon={<AlertTriangle size={22} className="text-red-500"/>} onClick={triggerSOS} />
@@ -271,10 +335,27 @@ const DriverCockpit: React.FC = () => {
                        
                        <div className="flex gap-2">
                           <span className="bg-emerald-100 text-emerald-700 font-black text-[10px] uppercase tracking-widest px-3 py-1.5 rounded-full">Unit: {currentTrip.logistics?.vehicleDetail || 'Bus 01'}</span>
-                          {/* Guide will handle names, driver just needs to know how many to expect */}
                           {currentTrip.passenger_count && <span className="bg-slate-100 text-slate-600 font-black text-[10px] uppercase tracking-widest px-3 py-1.5 rounded-full">Est. {currentTrip.passenger_count} PAX</span>}
                        </div>
                    </div>
+
+                   {/* 🌟 NEW PROMINENT SCAN & BOARD BUTTON */}
+                   <button 
+                      onClick={() => setShowScanner(true)}
+                      className="w-full bg-slate-900 text-white p-5 rounded-[2rem] shadow-xl flex items-center justify-center gap-3 active:scale-95 transition-all hover:bg-slate-800"
+                   >
+                      <ScanLine size={24} className="text-blue-400"/>
+                      <span className="font-black text-lg">Scan & Board Passengers</span>
+                   </button>
+
+                   {/* 🌟 NEW MOBILE FIELD APP REDIRECT BUTTON */}
+                   <button 
+                      onClick={() => navigate('/mobile-field')} // Make sure this matches your Route path in App.tsx!
+                      className="w-full bg-blue-50 text-blue-600 p-5 rounded-[2rem] shadow-sm flex items-center justify-center gap-3 active:scale-95 transition-all hover:bg-blue-100 border border-blue-100 mt-4"
+                   >
+                      <Smartphone size={24} className="text-blue-500"/>
+                      <span className="font-black text-lg">Open Field App</span>
+                   </button>
 
                    <div className="bg-white/80 backdrop-blur-xl p-6 rounded-[2.5rem] shadow-[0_20px_40px_rgb(0,0,0,0.08)] border border-white">
                        <div className="flex justify-between items-center mb-6">
@@ -352,7 +433,7 @@ const DriverCockpit: React.FC = () => {
           </>
       )}
 
-      {/* 🛡️ PRE-TRIP CHECKLIST */}
+      {/* 🛡️ PRE-TRIP CHECKLIST MODAL */}
       {showChecklist && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm">
               <div className="bg-white w-full max-w-md rounded-[3rem] p-10 shadow-2xl animate-in zoom-in-95 border border-white">
@@ -371,7 +452,7 @@ const DriverCockpit: React.FC = () => {
           </div>
       )}
 
-      {/* 💰 REAL EXPENSE LOGGER */}
+      {/* 💰 REAL EXPENSE LOGGER MODAL */}
       {showExpenseLogger && (
           <div className="fixed inset-0 z-[200] flex flex-col justify-end bg-slate-900/60 backdrop-blur-sm">
               <div className="bg-white w-full max-w-md mx-auto rounded-t-[3rem] p-8 shadow-2xl animate-in slide-in-from-bottom-full border-t border-white pb-12">
@@ -397,12 +478,63 @@ const DriverCockpit: React.FC = () => {
               </div>
           </div>
       )}
+
+      {/* 🌟 FULL SCREEN QR SCANNER MODAL */}
+      {showScanner && (
+         <div className="fixed inset-0 z-[300] bg-black flex flex-col animate-in slide-in-from-bottom-full duration-300">
+             <div className="p-6 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent absolute top-0 w-full z-10">
+                 <div className="text-white">
+                    <h3 className="font-black text-lg flex items-center gap-2"><QrCode size={18}/> Scan Passport</h3>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Position QR Code in frame</p>
+                 </div>
+                 <button onClick={() => { setShowScanner(false); setScanFeedback(null); }} className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center text-white backdrop-blur-md active:scale-95"><X/></button>
+             </div>
+
+             {/* Camera Viewport */}
+             <div className="flex-1 relative flex items-center justify-center bg-black">
+                 <Scanner 
+                    onScan={(result) => handleScan(result[0].rawValue)} 
+                    components={{ zoom: true, finder: true }}
+                    styles={{ container: { width: '100%', height: '100%' } }}
+                 />
+                 
+                 {/* Scanner Overlay Target */}
+                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                     <div className="w-64 h-64 border-4 border-white/30 rounded-[3rem] relative">
+                         <div className="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-emerald-500 rounded-tl-[3rem]"></div>
+                         <div className="absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 border-emerald-500 rounded-tr-[3rem]"></div>
+                         <div className="absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 border-emerald-500 rounded-bl-[3rem]"></div>
+                         <div className="absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 border-emerald-500 rounded-br-[3rem]"></div>
+                     </div>
+                 </div>
+             </div>
+
+             {/* Live Feedback Toast */}
+             <div className="absolute bottom-10 left-6 right-6">
+                 {scanFeedback ? (
+                     <div className={`p-6 rounded-[2rem] shadow-2xl flex items-center gap-4 animate-in slide-in-from-bottom-4 zoom-in-95 duration-200
+                        ${scanFeedback.type === 'success' ? 'bg-emerald-500 text-white' : 
+                          scanFeedback.type === 'warning' ? 'bg-amber-400 text-amber-950' : 
+                          'bg-red-500 text-white'}`}
+                     >
+                         {scanFeedback.type === 'success' ? <CheckCircle2 size={32} /> : <AlertTriangle size={32}/>}
+                         <p className="font-black text-sm">{scanFeedback.message}</p>
+                     </div>
+                 ) : (
+                     <div className="bg-white/10 backdrop-blur-xl p-6 rounded-[2rem] text-center border border-white/10">
+                         <p className="text-white font-black text-sm">Waiting for scan...</p>
+                         <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Hold device steady</p>
+                     </div>
+                 )}
+             </div>
+         </div>
+      )}
     </div>
   );
 };
 
 const DockButton = ({ icon, onClick, active }: any) => (
-    <button onClick={onClick} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all relative ${active ? 'bg-slate-100 text-slate-900' : 'bg-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-900'}`}>
+    <button onClick={onClick} className={`w-14 h-14 rounded-full flex items-center justify-center transition-all relative ${active ? 'bg-slate-100 text-slate-900' : 'bg-transparent text-white/70 hover:bg-white/10 hover:text-white'}`}>
         {icon}
         {active && <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-red-500 border-2 border-white rounded-full"></span>}
     </button>

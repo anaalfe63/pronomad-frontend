@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback,
+    useRef } from 'react';
+    import { Scanner } from '@yudiel/react-qr-scanner';
 import { useTenant } from '../contexts/TenantContext'; 
 import { supabase } from '../lib/supabase';
 import { logAudit } from '../lib/auditLogger';
 import { useNavigate } from 'react-router-dom'; 
 import { 
   Users, CheckCircle, Clock, MapPin, Send, Plus, X, Pencil, Save, Wallet,
-  Navigation, CloudUpload, RefreshCw, BedDouble, Utensils, 
-  HeartPulse, Briefcase, Search, UserCheck, Trash2, Globe, ListPlus,
+  Navigation, CloudUpload, RefreshCw, BedDouble, Utensils, QrCode, ScanLine,
+  HeartPulse, Briefcase, Search, UserCheck, Trash2, Globe, ListPlus,AlertTriangle,
   CloudOff, ChevronUp, ChevronDown, Link, AlertCircle, LinkIcon, Eye,
   Bell, Share2 // 🌟 Added Share2 for WhatsApp button
 } from 'lucide-react';
@@ -1054,6 +1056,11 @@ const FieldOperations: React.FC<{ subscriberId: string }> = ({ subscriberId }) =
     const { user } = useTenant();
     const [tours, setTours] = useState<Trip[]>([]);
     const APP_COLOR = user?.themeColor || '#0d9488';
+    
+    // 🌟 NEW SCANNER STATES
+    const [activeTripForScanner, setActiveTripForScanner] = useState<string | number | null>(null);
+    const [scanFeedback, setScanFeedback] = useState<{ type: 'success' | 'error' | 'warning', message: string } | null>(null);
+    const processingScan = useRef(false);
   
     useEffect(() => {
       const fetchMyTrips = async () => {
@@ -1061,12 +1068,72 @@ const FieldOperations: React.FC<{ subscriberId: string }> = ({ subscriberId }) =
             .from('trips')
             .select('*')
             .eq('subscriber_id', subscriberId)
+            .in('status', ['Dispatched', 'Active']) // Only show dispatched trips
             .or(`logistics->>driver.eq.${user?.fullName},logistics->>guide.eq.${user?.fullName}`);
 
         if (!error && data) setTours(data);
       };
       if (user?.fullName) fetchMyTrips();
     }, [user]);
+
+    // 🌟 QR SCAN PROCESSING ENGINE
+    const handleScan = async (text: string) => {
+        // 1. Prevent double-scanning the same code rapidly
+        if (processingScan.current) return;
+        processingScan.current = true;
+        setScanFeedback(null);
+
+        try {
+            // 2. Extract the Booking ID from the Pronomad Passport format
+                if (!text.startsWith('pronomad:verify:')) {
+                    throw new Error("Invalid QR Code. Please scan a valid Pronomad Passport.");
+                }
+
+                const bookingId = text.replace('pronomad:verify:', '');
+
+                if (!bookingId) throw new Error("Corrupted QR Code.");
+
+            // 3. Look up the passenger on THIS specific trip
+            const { data: pax, error } = await supabase
+                .from('passengers')
+                .select('*')
+                .eq('booking_id', bookingId)
+                .eq('trip_id', activeTripForScanner)
+                .single();
+
+            if (error || !pax) {
+                setScanFeedback({ type: 'error', message: "Passenger not found on this manifest!" });
+                return;
+            }
+
+            // 4. Check Payment Verification
+            if (pax.payment_status !== 'Full') {
+                setScanFeedback({ type: 'warning', message: `STOP! ${pax.first_name} ${pax.last_name} has an unverified or pending balance. Do not board.` });
+                // Play warning sound (optional)
+                new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3').play().catch(()=>console.log('Audio blocked'));
+                return;
+            }
+
+            // 5. Check if already boarded
+            if (pax.boarded) {
+                setScanFeedback({ type: 'warning', message: `${pax.first_name} is already checked in.` });
+                return;
+            }
+
+            // 6. Update Database -> Boarded! (This triggers real-time updates to HQ)
+            await supabase.from('passengers').update({ boarded: true }).eq('id', pax.id);
+            
+            // Success State
+            setScanFeedback({ type: 'success', message: `✅ ${pax.first_name} ${pax.last_name} Boarded Successfully!` });
+            new Audio('https://assets.mixkit.co/active_storage/sfx/1435/1435-preview.mp3').play().catch(()=>console.log('Audio blocked'));
+
+        } catch (e: any) {
+            setScanFeedback({ type: 'error', message: e.message });
+        } finally {
+            // Cool down the scanner for 3 seconds before accepting a new scan
+            setTimeout(() => { processingScan.current = false; }, 3000);
+        }
+    };
   
     return (
       <div className="animate-fade-in pb-24 max-w-md mx-auto">
@@ -1103,13 +1170,73 @@ const FieldOperations: React.FC<{ subscriberId: string }> = ({ subscriberId }) =
                 </div>
               </div>
               <div className="flex gap-3 mt-4">
-                  <button onClick={() => navigate(`/fleet`)} className="flex-1 text-white py-4 rounded-3xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-xl active:scale-95 transition-all" style={{ backgroundColor: APP_COLOR }}>
-                      <Navigation size={18}/> Go Live (GPS)
+                  <button onClick={() => navigate(`/fleet`)} className="w-14 bg-slate-100 text-slate-500 rounded-3xl flex items-center justify-center shadow-sm hover:bg-slate-200 transition-all active:scale-95" title="Open GPS">
+                      <Navigation size={18}/>
+                  </button>
+                  {/* 🌟 NEW BOARDING SCANNER BUTTON */}
+                  <button 
+                     onClick={() => setActiveTripForScanner(tour.id)} 
+                     className="flex-1 text-white py-4 rounded-3xl font-black text-xs uppercase tracking-widest flex items-center justify-center gap-2 shadow-xl active:scale-95 transition-all" 
+                     style={{ backgroundColor: APP_COLOR }}
+                  >
+                      <ScanLine size={18}/> Scan & Board
                   </button>
               </div>
             </div>
           ))}
         </div>
+
+        {/* 🌟 FULL SCREEN QR SCANNER MODAL */}
+        {activeTripForScanner && (
+           <div className="fixed inset-0 z-[500] bg-black flex flex-col animate-in slide-in-from-bottom-full duration-300">
+               <div className="p-6 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent absolute top-0 w-full z-10">
+                   <div className="text-white">
+                      <h3 className="font-black text-lg flex items-center gap-2"><QrCode size={18}/> Scan Passport</h3>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Position QR Code in frame</p>
+                   </div>
+                   <button onClick={() => { setActiveTripForScanner(null); setScanFeedback(null); }} className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center text-white backdrop-blur-md active:scale-95"><X/></button>
+               </div>
+
+               {/* Camera Viewport */}
+               <div className="flex-1 relative flex items-center justify-center bg-black">
+                   <Scanner 
+                    onScan={(result) => handleScan(result[0].rawValue)} 
+                    components={{ zoom: true, finder: true }}
+                    styles={{ container: { width: '100%', height: '100%' } }}
+                    />
+                   
+                   {/* Scanner Overlay Target */}
+                   <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                       <div className="w-64 h-64 border-4 border-white/30 rounded-[3rem] relative">
+                           {/* Corner brackets for UI styling */}
+                           <div className="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-emerald-500 rounded-tl-[3rem]"></div>
+                           <div className="absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 border-emerald-500 rounded-tr-[3rem]"></div>
+                           <div className="absolute -bottom-1 -left-1 w-8 h-8 border-b-4 border-l-4 border-emerald-500 rounded-bl-[3rem]"></div>
+                           <div className="absolute -bottom-1 -right-1 w-8 h-8 border-b-4 border-r-4 border-emerald-500 rounded-br-[3rem]"></div>
+                       </div>
+                   </div>
+               </div>
+
+               {/* Live Feedback Toast */}
+               <div className="absolute bottom-10 left-6 right-6">
+                   {scanFeedback ? (
+                       <div className={`p-6 rounded-[2rem] shadow-2xl flex items-center gap-4 animate-in slide-in-from-bottom-4 zoom-in-95 duration-200
+                          ${scanFeedback.type === 'success' ? 'bg-emerald-500 text-white' : 
+                            scanFeedback.type === 'warning' ? 'bg-amber-400 text-amber-950' : 
+                            'bg-red-500 text-white'}`}
+                       >
+                           {scanFeedback.type === 'success' ? <CheckCircle size={32} /> : <AlertTriangle size={32}/>}
+                           <p className="font-black text-sm">{scanFeedback.message}</p>
+                       </div>
+                   ) : (
+                       <div className="bg-white/10 backdrop-blur-xl p-6 rounded-[2rem] text-center border border-white/10">
+                           <p className="text-white font-black text-sm">Waiting for scan...</p>
+                           <p className="text-[10px] text-slate-400 uppercase tracking-widest mt-1">Hold device steady</p>
+                       </div>
+                   )}
+               </div>
+           </div>
+        )}
       </div>
     );
 };
