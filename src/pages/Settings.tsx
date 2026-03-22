@@ -87,7 +87,7 @@ const Settings: React.FC = () => {
       setIsCreatingSubaccount(true);
 
       try {
-          // 🔴 PASTE YOUR ACTUAL PAYSTACK SECRET KEY HERE (Test or Live)
+         
           const PAYSTACK_SECRET_KEY = "sk_test_removed_for_security";
 
           const response = await fetch('https://api.paystack.co/subaccount', {
