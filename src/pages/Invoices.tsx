@@ -1,9 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { FileText, Plus, Search, CheckCircle, AlertCircle, X, Printer, PlusCircle, Trash2, Building2, CreditCard, Link as LinkIcon, RefreshCw, Zap, CloudOff, CloudUpload } from 'lucide-react';
+import { 
+  FileText, Plus, Search, CheckCircle, AlertCircle, X, Printer, 
+  PlusCircle, Trash2, Building2, CreditCard, Link as LinkIcon, 
+  RefreshCw, Zap, CloudOff, CloudUpload, Calendar, Building, Calculator 
+} from 'lucide-react';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
+import { logAudit } from '../lib/auditLogger';
 
-// --- TYPES & INTERFACES ---
+declare global {
+  interface Window {
+    PaystackPop: any;
+  }
+}
+
+// --- B2B CLIENT INVOICE TYPES ---
 interface InvoiceItem { desc: string; qty: number; price: number; }
 interface Invoice {
   id: string; client: string; email: string; address: string; project: string;
@@ -15,17 +26,31 @@ type NewInvoiceState = Omit<Invoice, 'id' | 'subtotal' | 'total' | 'amountPaid' 
 interface Trip { id: string; title: string; startDate: string; adultPrice: number; childPrice: number; }
 interface SyncAction { id: number; table: string; action: 'UPDATE' | 'INSERT' | 'DELETE'; recordId?: string | number; payload?: any; }
 
-const Invoices: React.FC = () => {
-  const { user } = useTenant();
-  const MY_SUBSCRIBER_ID = user?.subscriberId || "";
-  
-  // 🌟 DYNAMIC TENANT SETTINGS
-  const BASE_CURRENCY = user?.currency || 'GHS';
-  const DEFAULT_TAX = user?.taxRate || 0;
+// --- PLATFORM FEE TYPES ---
+interface PlatformInvoice {
+  id: string; created_at: string; subscriber_id: string; agency_name: string;
+  invoice_month: string; cash_volume: number; platform_fee: number; status: string;
+}
 
+const Invoices: React.FC = () => {
+  const { user, settings } = useTenant();
+  const MY_SUBSCRIBER_ID = user?.subscriberId || "";
+  const isProAdmin = user?.role?.toUpperCase() === 'PROADMIN';
+  
+  // 🌟 DYNAMIC TENANT SETTINGS 
+  const BASE_CURRENCY = settings?.currency || 'GHS';
+  const DEFAULT_TAX = settings?.tax_rate || 0;
+  const APP_COLOR = settings?.theme_color || '#0d9488';
+
+  // --- TAB STATE ---
+  const [activeTab, setActiveTab] = useState<'b2b' | 'platform'>(isProAdmin ? 'platform' : 'b2b');
+
+  // ==========================================
+  // STATE: B2B CLIENT INVOICING (Your Code)
+  // ==========================================
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [tripsDb, setTripsDb] = useState<Trip[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoadingB2B, setIsLoadingB2B] = useState<boolean>(true);
   const [isSaving, setIsSaving] = useState<boolean>(false);
 
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -47,9 +72,30 @@ const Invoices: React.FC = () => {
   });
   const [isSyncing, setIsSyncing] = useState(false);
 
+  // ==========================================
+  // STATE: PLATFORM SAAS FEES (New Code)
+  // ==========================================
+  const [platformInvoices, setPlatformInvoices] = useState<PlatformInvoice[]>([]);
+  const [isLoadingPlatform, setIsLoadingPlatform] = useState(true);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [payingInvoice, setPayingInvoice] = useState<string | null>(null);
+
+
+  // ==========================================
+  // INITIALIZATION & SYNCS
+  // ==========================================
   useEffect(() => {
      localStorage.setItem('pronomad_invoice_sync', JSON.stringify(pendingSyncs));
   }, [pendingSyncs]);
+
+  useEffect(() => {
+    if (!window.PaystackPop) {
+        const script = document.createElement('script');
+        script.src = 'https://js.paystack.co/v1/inline.js';
+        script.async = true;
+        document.body.appendChild(script);
+    }
+  }, []);
 
   const processSyncQueue = useCallback(async () => {
       if (!navigator.onLine || pendingSyncs.length === 0 || isSyncing) return;
@@ -76,7 +122,7 @@ const Invoices: React.FC = () => {
       }
       setPendingSyncs(remaining);
       setIsSyncing(false);
-      if (remaining.length === 0) fetchData(); 
+      if (remaining.length === 0) fetchB2BData(); 
   }, [pendingSyncs, isSyncing]);
 
   useEffect(() => {
@@ -92,11 +138,13 @@ const Invoices: React.FC = () => {
       };
   }, [processSyncQueue]);
 
-  const fetchData = async () => {
-    setIsLoading(true);
+  // ==========================================
+  // B2B DATA FETCHING
+  // ==========================================
+  const fetchB2BData = async () => {
+    setIsLoadingB2B(true);
     try {
       if (!MY_SUBSCRIBER_ID) return;
-      
       const [tripsRes, invRes] = await Promise.all([
           supabase.from('trips').select('*').eq('subscriber_id', MY_SUBSCRIBER_ID),
           supabase.from('invoices').select('*').eq('subscriber_id', MY_SUBSCRIBER_ID).order('created_at', { ascending: false })
@@ -125,12 +173,34 @@ const Invoices: React.FC = () => {
         });
         setInvoices(formattedInvoices);
       }
-    } catch (error) { console.error("Database connection error:", error); } 
-    finally { setIsLoading(false); }
+    } catch (error) { console.error("Database error:", error); } 
+    finally { setIsLoadingB2B(false); }
   };
 
-  useEffect(() => { if (MY_SUBSCRIBER_ID) fetchData(); }, [MY_SUBSCRIBER_ID]);
+  useEffect(() => { if (MY_SUBSCRIBER_ID) fetchB2BData(); }, [MY_SUBSCRIBER_ID]);
 
+  // ==========================================
+  // PLATFORM FEE FETCHING
+  // ==========================================
+  const fetchPlatformInvoices = async () => {
+    setIsLoadingPlatform(true);
+    try {
+      let query = supabase.from('platform_invoices').select('*').order('created_at', { ascending: false });
+      if (!isProAdmin) query = query.eq('subscriber_id', MY_SUBSCRIBER_ID);
+
+      const { data, error } = await query;
+      if (error) throw error;
+      setPlatformInvoices(data || []);
+    } catch (err) { console.error(err); } 
+    finally { setIsLoadingPlatform(false); }
+  };
+
+  useEffect(() => { if (user) fetchPlatformInvoices(); }, [user]);
+
+
+  // ==========================================
+  // B2B LOGIC & HANDLERS
+  // ==========================================
   const handleAutoFillFromTrip = (tripId: string) => {
       const trip = tripsDb.find(t => String(t.id) === String(tripId));
       if (!trip) return;
@@ -164,23 +234,10 @@ const Invoices: React.FC = () => {
     const tempId = `INV-${Math.floor(Math.random() * 90000) + 10000}`;
     
     const payload = {
-        id: tempId,
-        subscriber_id: MY_SUBSCRIBER_ID,
-        client_name: newInvoice.client,
-        email: newInvoice.email,
-        address: newInvoice.address,
-        project_name: newInvoice.project,
-        trip_id: newInvoice.tripId || null,
-        issue_date: newInvoice.issueDate,
-        due_date: newInvoice.dueDate,
-        currency: newInvoice.currency,
-        items: newInvoice.items,
-        tax_rate: newInvoice.taxRate,
-        discount: newInvoice.discount,
-        subtotal: subtotal,
-        total: total,
-        amount_paid: 0,
-        status: 'Sent'
+        id: tempId, subscriber_id: MY_SUBSCRIBER_ID, client_name: newInvoice.client, email: newInvoice.email, address: newInvoice.address,
+        project_name: newInvoice.project, trip_id: newInvoice.tripId || null, issue_date: newInvoice.issueDate, due_date: newInvoice.dueDate,
+        currency: newInvoice.currency, items: newInvoice.items, tax_rate: newInvoice.taxRate, discount: newInvoice.discount,
+        subtotal: subtotal, total: total, amount_paid: 0, status: 'Sent'
     };
 
     const optimisticInvoice: Invoice = { id: tempId, ...newInvoice, subtotal, total, amountPaid: 0, status: 'Sent' };
@@ -192,7 +249,11 @@ const Invoices: React.FC = () => {
       if (!navigator.onLine) throw new Error("Offline");
       const { error } = await supabase.from('invoices').insert([payload]);
       if (error) throw error;
-      fetchData(); 
+      
+      if (user?.subscriberId) {
+          await logAudit(user.subscriberId, user.fullName || user.username || 'System', user.role, 'Generated Invoice', `Created invoice ${tempId} for ${payload.client_name} totaling ${payload.currency} ${payload.total.toLocaleString()}.`);
+      }
+      fetchB2BData(); 
     } catch (error) { 
       setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'invoices', action: 'INSERT', payload: payload }]);
     } finally { setIsSaving(false); }
@@ -207,7 +268,6 @@ const Invoices: React.FC = () => {
     let updatedTotalPaid = (selectedInvoice.amountPaid || 0) + payment;
 
     if (updatedTotalPaid >= selectedInvoice.total - 0.5) newStatus = 'Paid';
-
     const payload = { amount_paid: updatedTotalPaid, status: newStatus };
 
     setInvoices(prev => prev.map(inv => inv.id === selectedInvoice.id ? { ...inv, amountPaid: updatedTotalPaid, status: newStatus } : inv));
@@ -218,6 +278,9 @@ const Invoices: React.FC = () => {
       if (!navigator.onLine) throw new Error("Offline");
       const { error } = await supabase.from('invoices').update(payload).eq('id', selectedInvoice.id);
       if (error) throw error;
+      if (user?.subscriberId) {
+          await logAudit(user.subscriberId, user.fullName || user.username || 'System', user.role, 'Logged Invoice Payment', `Recorded payment of ${selectedInvoice.currency} ${payment.toLocaleString()} against invoice ${selectedInvoice.id}.`);
+      }
     } catch (error) { 
       setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'invoices', action: 'UPDATE', recordId: selectedInvoice.id, payload: payload }]);
     }
@@ -225,16 +288,82 @@ const Invoices: React.FC = () => {
 
   const handleDeleteInvoice = async (id: string) => {
       if(!window.confirm("Are you sure you want to permanently delete this invoice?")) return;
+      const invoiceToDelete = invoices.find(inv => inv.id === id);
       setInvoices(prev => prev.filter(inv => inv.id !== id));
       setIsViewModalOpen(false);
       try {
           if (!navigator.onLine) throw new Error("Offline");
-          await supabase.from('invoices').delete().eq('id', id);
+          const { error } = await supabase.from('invoices').delete().eq('id', id);
+          if (error) throw error;
+          if (user?.subscriberId && invoiceToDelete) {
+              await logAudit(user.subscriberId, user.fullName || user.username || 'System', user.role, 'Deleted Invoice', `Permanently deleted invoice ${id}.`);
+          }
       } catch (e) { 
           setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'invoices', action: 'DELETE', recordId: id }]);
       }
   };
 
+  // ==========================================
+  // PLATFORM FEE LOGIC & HANDLERS
+  // ==========================================
+  const generateMonthlyInvoices = async () => {
+    if (!window.confirm("Scan all cash bookings for Startup plans and generate invoices for the current month?")) return;
+    setIsGenerating(true);
+
+    try {
+      const monthName = new Date().toLocaleString('default', { month: 'long', year: 'numeric' });
+      const { data: agencies } = await supabase.from('subscribers').select('id, name, plan').in('plan', ['startup', 'starter', 'Startup', 'Starter']);
+      
+      if (!agencies || agencies.length === 0) {
+          alert("No agencies found on the Startup plan.");
+          setIsGenerating(false); return;
+      }
+
+      let generatedCount = 0;
+      for (const agency of agencies) {
+          const { data: existing } = await supabase.from('platform_invoices').select('id').eq('subscriber_id', agency.id).eq('invoice_month', monthName).single();
+          if (existing) continue;
+
+          const { data: cashBookings } = await supabase.from('bookings').select('amount_paid').eq('subscriber_id', agency.id).in('payment_method', ['Cash/Transfer', 'Cash Deposit (Back-Office)']);
+          const totalCashVolume = cashBookings?.reduce((sum, b) => sum + Number(b.amount_paid), 0) || 0;
+
+          if (totalCashVolume > 0) {
+              const platformFee = totalCashVolume * 0.05;
+              await supabase.from('platform_invoices').insert([{
+                  subscriber_id: agency.id, agency_name: agency.name || 'Agency', invoice_month: monthName,
+                  cash_volume: totalCashVolume, platform_fee: platformFee, status: 'Unpaid'
+              }]);
+              generatedCount++;
+          }
+      }
+      alert(`Successfully generated ${generatedCount} new invoices for ${monthName}.`);
+      fetchPlatformInvoices();
+    } catch (err: any) { alert("Error generating invoices: " + err.message); } 
+    finally { setIsGenerating(false); }
+  };
+
+  const handlePayPlatformInvoice = (invoice: PlatformInvoice) => {
+      setPayingInvoice(invoice.id);
+      if (!window.PaystackPop) return alert("Payment gateway loading...");
+
+      const handler = window.PaystackPop.setup({
+          key: 'pk_test_1aba8bc644e635df6587945e80d59ea5add57110', // 🔴 Replace with actual key
+          email: user?.email || 'admin@agency.com',
+          amount: invoice.platform_fee * 100,
+          currency: 'GHS',
+          callback: async function(response: any) {
+              await supabase.from('platform_invoices').update({ status: 'Paid' }).eq('id', invoice.id);
+              await logAudit(user?.subscriberId || '', user?.fullName || 'System', user?.role || '', 'Paid Platform Invoice', `Paid GHS ${invoice.platform_fee} for ${invoice.invoice_month}`);
+              alert("Invoice Paid Successfully!");
+              fetchPlatformInvoices();
+              setPayingInvoice(null);
+          },
+          onClose: function() { setPayingInvoice(null); }
+      });
+      handler.openIframe();
+  };
+
+  // --- DERIVED METRICS ---
   const totalOutstanding = invoices.reduce((sum, i) => sum + (i.total - (i.amountPaid || 0)), 0);
   const totalOverdue = invoices.filter(i => i.status === 'Overdue').reduce((sum, i) => sum + (i.total - (i.amountPaid || 0)), 0);
   const filteredInvoices = invoices.filter(inv => (inv.client || '').toLowerCase().includes(searchQuery.toLowerCase()) || (inv.id || '').toLowerCase().includes(searchQuery.toLowerCase()));
@@ -252,107 +381,209 @@ const Invoices: React.FC = () => {
         }
       `}</style>
 
-      {/* HEADER */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-8">
+      {/* HEADER & TABS */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 mb-8 px-4 md:px-8 mt-8">
         <div>
           <div className="flex items-center gap-4">
-            <h1 className="text-3xl font-extrabold text-teal-900 tracking-tight" style={{ color: user?.themeColor }}>Corporate Invoicing</h1>
-            {pendingSyncs.length > 0 ? (
+            <h1 className="text-3xl font-extrabold text-teal-900 tracking-tight" style={{ color: APP_COLOR }}>Invoicing & Billing</h1>
+            {activeTab === 'b2b' && pendingSyncs.length > 0 ? (
                  <div className="flex items-center gap-2 bg-orange-100 text-orange-700 px-3 py-1 rounded-full text-xs font-black uppercase tracking-widest cursor-pointer" onClick={processSyncQueue}>
                     {isSyncing ? <RefreshCw size={14} className="animate-spin"/> : <CloudOff size={14}/>}
                     {pendingSyncs.length} Pending
                  </div>
-            ) : (
-                 <div className="flex items-center gap-1 text-slate-300" title="Cloud Synced">
-                    <CloudUpload size={20}/>
-                 </div>
-            )}
+            ) : activeTab === 'b2b' ? (
+                 <div className="flex items-center gap-1 text-slate-300" title="Cloud Synced"><CloudUpload size={20}/></div>
+            ) : null}
           </div>
-          <p className="text-slate-500 font-medium">Manage B2B billing, generate professional PDFs, and track partial payments.</p>
+          <p className="text-slate-500 font-medium">Manage client billing and your platform subscription fees.</p>
         </div>
-        <button onClick={() => setIsCreateModalOpen(true)} className="text-white px-6 py-3 rounded-xl font-bold shadow-lg flex items-center gap-2 transition-all active:scale-95" style={{ backgroundColor: user?.themeColor || '#0d9488' }}>
-          <Plus size={18}/> Draft New Invoice
-        </button>
-      </div>
 
-      {/* KPI CARDS */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-        <div className="bg-white/70 backdrop-blur-xl p-6 rounded-[2rem] shadow-xl border border-white/60 relative overflow-hidden">
-          <p className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2">Total Receivables (Due)</p>
-          <h2 className="text-3xl font-black text-slate-800"><span className="text-lg text-slate-400 mr-1">{BASE_CURRENCY}</span>{totalOutstanding.toLocaleString()}</h2>
-        </div>
-        <div className="bg-white/70 backdrop-blur-xl p-6 rounded-[2rem] shadow-xl border border-white/60 relative overflow-hidden">
-          <p className="text-sm font-bold text-red-500 uppercase tracking-wider mb-2 flex items-center gap-1"><AlertCircle size={16}/> Overdue Receivables</p>
-          <h2 className="text-3xl font-black text-red-600"><span className="text-lg text-red-300 mr-1">{BASE_CURRENCY}</span>{totalOverdue.toLocaleString()}</h2>
+        <div className="flex bg-slate-200 p-1 rounded-xl">
+           <button onClick={() => setActiveTab('b2b')} className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'b2b' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
+              Client B2B Invoices
+           </button>
+           <button onClick={() => setActiveTab('platform')} className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'platform' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}>
+              Platform Fees
+           </button>
         </div>
       </div>
 
-      {/* INVOICE TABLE */}
-      <div className="bg-white/70 backdrop-blur-xl rounded-[2.5rem] shadow-xl border border-white/60 p-8">
-        <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-2 rounded-xl w-full max-w-sm mb-6 focus-within:border-teal-500 transition-colors">
-          <Search size={18} className="text-slate-400 ml-2" />
-          <input type="text" placeholder="Search by Client or Invoice ID..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-transparent outline-none text-sm font-bold text-slate-700" />
-        </div>
+      {/* =======================================================
+          TAB 1: CLIENT B2B INVOICES
+          ======================================================= */}
+      {activeTab === 'b2b' && (
+        <div className="px-4 md:px-8 animate-in slide-in-from-left-4">
+          
+          <div className="flex justify-end mb-6">
+            <button onClick={() => setIsCreateModalOpen(true)} className="text-white px-6 py-3 rounded-xl font-bold shadow-lg flex items-center gap-2 transition-all active:scale-95" style={{ backgroundColor: APP_COLOR }}>
+              <Plus size={18}/> Draft New Invoice
+            </button>
+          </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[1000px]">
-            <thead>
-              <tr className="bg-slate-50/50 border-b border-slate-200 text-slate-400 text-[10px] uppercase tracking-widest">
-                <th className="p-6 font-bold rounded-tl-xl">Invoice #</th>
-                <th className="p-6 font-bold">Client / Project</th>
-                <th className="p-6 font-bold">Timeline</th>
-                <th className="p-6 font-bold text-right">Total Billed</th>
-                <th className="p-6 font-bold text-right">Balance Due</th>
-                <th className="p-6 font-bold">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {isLoading && invoices.length === 0 ? (
-                <tr><td colSpan={6} className="p-12 text-center text-teal-600 font-bold animate-pulse"><RefreshCw className="inline animate-spin mr-2"/> Syncing with Database...</td></tr>
-              ) : filteredInvoices.length === 0 ? (
-                <tr><td colSpan={6} className="p-12 text-center text-slate-400 font-bold">No invoices found.</td></tr>
-              ) : (
-                filteredInvoices.map((inv) => {
-                  const balance = inv.total - (inv.amountPaid || 0);
-                  return (
-                  <tr key={inv.id} className="hover:bg-slate-50 transition-colors group cursor-pointer" onClick={() => { setSelectedInvoice(inv); setPaymentInput(''); setIsViewModalOpen(true); }}>
-                    <td className="p-6 font-mono text-sm font-bold flex items-center gap-2 mt-2" style={{ color: user?.themeColor || '#0d9488' }}>
-                      <FileText size={16} /> {String(inv.id).slice(0, 8)}
-                    </td>
-                    <td className="p-6">
-                      <p className="font-black text-slate-800 text-base flex items-center gap-2"><Building2 size={14} className="text-slate-400"/> {inv.client}</p>
-                      <p className="text-xs font-bold text-slate-500 mt-1">{inv.project || 'General Billing'}</p>
-                    </td>
-                    <td className="p-6 text-sm">
-                      <p className="text-slate-500 font-bold">Issued: {inv.issueDate}</p>
-                      <p className={`font-black mt-1 ${inv.status === 'Overdue' ? 'text-red-500' : 'text-slate-700'}`}>Due: {inv.dueDate}</p>
-                    </td>
-                    <td className="p-6 font-black text-slate-400 text-right text-base line-through opacity-70">
-                      <span className="text-[10px] mr-1">{inv.currency}</span>{inv.total?.toLocaleString()}
-                    </td>
-                    <td className="p-6 font-black text-slate-800 text-right text-lg">
-                      <span className="text-[10px] text-slate-400 mr-1">{inv.currency}</span>{Math.max(0, balance).toLocaleString()}
-                    </td>
-                    <td className="p-6">
-                      <span className={`px-3 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-full flex items-center gap-1 w-max 
-                        ${inv.status === 'Paid' ? 'bg-green-100 text-green-700' : 
-                          inv.status === 'Partially Paid' ? 'bg-orange-100 text-orange-700' : 
-                          inv.status === 'Overdue' ? 'bg-red-100 text-red-700 border border-red-200' : 
-                          inv.status === 'Draft' ? 'bg-slate-100 text-slate-600' : 'bg-blue-100 text-blue-700'}`}>
-                        {inv.status === 'Paid' && <CheckCircle size={12}/>}
-                        {inv.status === 'Overdue' && <AlertCircle size={12}/>}
-                        {inv.status}
-                      </span>
-                    </td>
+          {/* KPI CARDS */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className="bg-white/70 backdrop-blur-xl p-6 rounded-[2rem] shadow-xl border border-white/60 relative overflow-hidden">
+              <p className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-2">Total Receivables (Due)</p>
+              <h2 className="text-3xl font-black text-slate-800"><span className="text-lg text-slate-400 mr-1">{BASE_CURRENCY}</span>{totalOutstanding.toLocaleString()}</h2>
+            </div>
+            <div className="bg-white/70 backdrop-blur-xl p-6 rounded-[2rem] shadow-xl border border-white/60 relative overflow-hidden">
+              <p className="text-sm font-bold text-red-500 uppercase tracking-wider mb-2 flex items-center gap-1"><AlertCircle size={16}/> Overdue Receivables</p>
+              <h2 className="text-3xl font-black text-red-600"><span className="text-lg text-red-300 mr-1">{BASE_CURRENCY}</span>{totalOverdue.toLocaleString()}</h2>
+            </div>
+          </div>
+
+          {/* INVOICE TABLE */}
+          <div className="bg-white/70 backdrop-blur-xl rounded-[2.5rem] shadow-xl border border-white/60 p-8">
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 p-2 rounded-xl w-full max-w-sm mb-6 focus-within:border-teal-500 transition-colors">
+              <Search size={18} className="text-slate-400 ml-2" />
+              <input type="text" placeholder="Search by Client or Invoice ID..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full bg-transparent outline-none text-sm font-bold text-slate-700" />
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse min-w-[1000px]">
+                <thead>
+                  <tr className="bg-slate-50/50 border-b border-slate-200 text-slate-400 text-[10px] uppercase tracking-widest">
+                    <th className="p-6 font-bold rounded-tl-xl">Invoice #</th>
+                    <th className="p-6 font-bold">Client / Project</th>
+                    <th className="p-6 font-bold">Timeline</th>
+                    <th className="p-6 font-bold text-right">Total Billed</th>
+                    <th className="p-6 font-bold text-right">Balance Due</th>
+                    <th className="p-6 font-bold">Status</th>
                   </tr>
-                )})
-              )}
-            </tbody>
-          </table>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {isLoadingB2B && invoices.length === 0 ? (
+                    <tr><td colSpan={6} className="p-12 text-center text-teal-600 font-bold animate-pulse"><RefreshCw className="inline animate-spin mr-2"/> Syncing with Database...</td></tr>
+                  ) : filteredInvoices.length === 0 ? (
+                    <tr><td colSpan={6} className="p-12 text-center text-slate-400 font-bold">No invoices found.</td></tr>
+                  ) : (
+                    filteredInvoices.map((inv) => {
+                      const balance = inv.total - (inv.amountPaid || 0);
+                      return (
+                      <tr key={inv.id} className="hover:bg-slate-50 transition-colors group cursor-pointer" onClick={() => { setSelectedInvoice(inv); setPaymentInput(''); setIsViewModalOpen(true); }}>
+                        <td className="p-6 font-mono text-sm font-bold flex items-center gap-2 mt-2" style={{ color: APP_COLOR }}>
+                          <FileText size={16} /> {String(inv.id).slice(0, 8)}
+                        </td>
+                        <td className="p-6">
+                          <p className="font-black text-slate-800 text-base flex items-center gap-2"><Building2 size={14} className="text-slate-400"/> {inv.client}</p>
+                          <p className="text-xs font-bold text-slate-500 mt-1">{inv.project || 'General Billing'}</p>
+                        </td>
+                        <td className="p-6 text-sm">
+                          <p className="text-slate-500 font-bold">Issued: {inv.issueDate}</p>
+                          <p className={`font-black mt-1 ${inv.status === 'Overdue' ? 'text-red-500' : 'text-slate-700'}`}>Due: {inv.dueDate}</p>
+                        </td>
+                        <td className="p-6 font-black text-slate-400 text-right text-base line-through opacity-70">
+                          <span className="text-[10px] mr-1">{inv.currency}</span>{inv.total?.toLocaleString()}
+                        </td>
+                        <td className="p-6 font-black text-slate-800 text-right text-lg">
+                          <span className="text-[10px] text-slate-400 mr-1">{inv.currency}</span>{Math.max(0, balance).toLocaleString()}
+                        </td>
+                        <td className="p-6">
+                          <span className={`px-3 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-full flex items-center gap-1 w-max 
+                            ${inv.status === 'Paid' ? 'bg-green-100 text-green-700' : 
+                              inv.status === 'Partially Paid' ? 'bg-orange-100 text-orange-700' : 
+                              inv.status === 'Overdue' ? 'bg-red-100 text-red-700 border border-red-200' : 
+                              inv.status === 'Draft' ? 'bg-slate-100 text-slate-600' : 'bg-blue-100 text-blue-700'}`}>
+                            {inv.status === 'Paid' && <CheckCircle size={12}/>}
+                            {inv.status === 'Overdue' && <AlertCircle size={12}/>}
+                            {inv.status}
+                          </span>
+                        </td>
+                      </tr>
+                    )})
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* MODAL 1: CREATE INVOICE WIZARD */}
+
+      {/* =======================================================
+          TAB 2: PLATFORM SAAS FEES
+          ======================================================= */}
+      {activeTab === 'platform' && (
+        <div className="px-4 md:px-8 mt-8 animate-in slide-in-from-right-4">
+           {isProAdmin && (
+            <div className="mb-8 flex justify-end">
+              <button 
+                 onClick={generateMonthlyInvoices} 
+                 disabled={isGenerating}
+                 className="bg-slate-900 hover:bg-slate-800 text-white px-6 py-3 rounded-xl font-black shadow-lg flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+              >
+                 {isGenerating ? <RefreshCw size={18} className="animate-spin"/> : <Calculator size={18}/>}
+                 {isGenerating ? 'Scanning Databases...' : 'Generate Startup Month Invoices'}
+              </button>
+            </div>
+          )}
+
+          {isLoadingPlatform ? (
+             <div className="py-20 flex justify-center"><RefreshCw size={32} className="animate-spin text-slate-300"/></div>
+          ) : platformInvoices.length === 0 ? (
+            <div className="bg-white rounded-[2rem] border-2 border-dashed border-slate-200 p-12 text-center flex flex-col items-center">
+               <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-4"><CheckCircle size={32} className="text-slate-300"/></div>
+               <h3 className="text-xl font-black text-slate-700">All caught up!</h3>
+               <p className="text-slate-500 font-medium mt-1">There are no pending platform invoices for this account.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+               {platformInvoices.map(inv => (
+                  <div key={inv.id} className="bg-white rounded-[2rem] shadow-xl border border-slate-100 overflow-hidden relative group">
+                     <div className={`p-6 border-b ${inv.status === 'Paid' ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
+                        <div className="flex justify-between items-center mb-2">
+                           <span className={`text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full ${inv.status === 'Paid' ? 'bg-emerald-200 text-emerald-800' : 'bg-red-200 text-red-800'}`}>
+                              {inv.status}
+                           </span>
+                           <span className="text-xs font-bold text-slate-500 flex items-center gap-1"><Calendar size={12}/> {inv.invoice_month}</span>
+                        </div>
+                        <h3 className="text-3xl font-black text-slate-800 mt-2">₵ {inv.platform_fee.toLocaleString()}</h3>
+                     </div>
+
+                     <div className="p-6 space-y-4">
+                        {isProAdmin && (
+                           <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                              <span className="text-xs font-bold text-slate-400 uppercase">Agency</span>
+                              <span className="text-sm font-black text-slate-800 flex items-center gap-1"><Building size={14}/> {inv.agency_name}</span>
+                           </div>
+                        )}
+                        <div className="flex items-center justify-between">
+                           <span className="text-xs font-bold text-slate-400 uppercase">Total Cash Processed</span>
+                           <span className="text-sm font-bold text-slate-600">₵ {Number(inv.cash_volume).toLocaleString()}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                           <span className="text-xs font-bold text-slate-400 uppercase">Platform Fee (5%)</span>
+                           <span className="text-sm font-black text-slate-800">₵ {inv.platform_fee.toLocaleString()}</span>
+                        </div>
+
+                        {!isProAdmin && inv.status !== 'Paid' && (
+                           <button 
+                              onClick={() => handlePayPlatformInvoice(inv)}
+                              disabled={payingInvoice === inv.id}
+                              className="w-full mt-4 bg-slate-900 hover:bg-slate-800 text-white py-4 rounded-2xl font-black transition-all flex items-center justify-center gap-2 active:scale-95 shadow-md disabled:opacity-50"
+                           >
+                              {payingInvoice === inv.id ? <RefreshCw size={18} className="animate-spin"/> : <CreditCard size={18}/>}
+                              Pay Outstanding Fee
+                           </button>
+                        )}
+
+                        {inv.status === 'Paid' && (
+                           <div className="w-full mt-4 bg-emerald-50 text-emerald-600 py-3 rounded-2xl font-black flex items-center justify-center gap-2 border border-emerald-100">
+                              <CheckCircle size={18}/> Settled
+                           </div>
+                        )}
+                     </div>
+                  </div>
+               ))}
+            </div>
+          )}
+        </div>
+      )}
+
+
+      {/* =======================================================
+          MODAL 1: CREATE B2B INVOICE WIZARD 
+          ======================================================= */}
       {isCreateModalOpen && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm" onClick={() => setIsCreateModalOpen(false)}></div>
@@ -361,7 +592,7 @@ const Invoices: React.FC = () => {
             <div className="bg-slate-50 border-b border-slate-100 p-6 flex justify-between items-center shrink-0">
               <div>
                 <h2 className="text-2xl font-black text-slate-800">Draft New Invoice</h2>
-                <p className="text-xs font-bold uppercase tracking-widest mt-1" style={{ color: user?.themeColor || '#0d9488' }}>B2B Invoice Generator</p>
+                <p className="text-xs font-bold uppercase tracking-widest mt-1" style={{ color: APP_COLOR }}>B2B Invoice Generator</p>
               </div>
               <button onClick={() => setIsCreateModalOpen(false)} className="p-2 bg-white rounded-full text-slate-400 hover:text-red-500 border border-slate-200"><X size={20} /></button>
             </div>
@@ -383,94 +614,54 @@ const Invoices: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Client / Company Name *</label>
-                  <input type="text" value={newInvoice.client} onChange={e => setNewInvoice({...newInvoice, client: e.target.value})} className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none font-bold text-slate-800 focus:border-slate-500 transition-colors" placeholder="e.g. Acme Corp"/>
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Project / Description</label>
-                  <input type="text" value={newInvoice.project} onChange={e => setNewInvoice({...newInvoice, project: e.target.value})} className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none text-slate-800 font-bold focus:border-slate-500 transition-colors" placeholder="e.g. Annual Corporate Retreat"/>
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Client Email (Optional)</label>
-                  <input type="email" value={newInvoice.email} onChange={e => setNewInvoice({...newInvoice, email: e.target.value})} className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none text-slate-800 focus:border-slate-500 transition-colors" placeholder="billing@acmecorp.com"/>
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Billing Address (Optional)</label>
-                  <input type="text" value={newInvoice.address} onChange={e => setNewInvoice({...newInvoice, address: e.target.value})} className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none text-slate-800 focus:border-slate-500 transition-colors" placeholder="123 Business Street..."/>
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Issue Date</label>
-                  <input type="date" value={newInvoice.issueDate} onChange={e => setNewInvoice({...newInvoice, issueDate: e.target.value})} className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none font-bold text-slate-700"/>
-                </div>
-                <div>
-                  <label className="text-[10px] font-bold text-red-400 uppercase ml-2 block mb-1">Payment Due Date *</label>
-                  <input type="date" value={newInvoice.dueDate} onChange={e => setNewInvoice({...newInvoice, dueDate: e.target.value})} className="w-full bg-white border-2 border-red-100 focus:border-red-400 p-4 rounded-xl outline-none font-bold text-red-700 transition-colors"/>
-                </div>
+                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Client / Company Name *</label><input type="text" value={newInvoice.client} onChange={e => setNewInvoice({...newInvoice, client: e.target.value})} className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none font-bold text-slate-800 focus:border-slate-500 transition-colors" placeholder="e.g. Acme Corp"/></div>
+                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Project / Description</label><input type="text" value={newInvoice.project} onChange={e => setNewInvoice({...newInvoice, project: e.target.value})} className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none text-slate-800 font-bold focus:border-slate-500 transition-colors" placeholder="e.g. Annual Corporate Retreat"/></div>
+                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Client Email (Optional)</label><input type="email" value={newInvoice.email} onChange={e => setNewInvoice({...newInvoice, email: e.target.value})} className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none text-slate-800 focus:border-slate-500 transition-colors" placeholder="billing@acmecorp.com"/></div>
+                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Billing Address (Optional)</label><input type="text" value={newInvoice.address} onChange={e => setNewInvoice({...newInvoice, address: e.target.value})} className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none text-slate-800 focus:border-slate-500 transition-colors" placeholder="123 Business Street..."/></div>
+                <div><label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Issue Date</label><input type="date" value={newInvoice.issueDate} onChange={e => setNewInvoice({...newInvoice, issueDate: e.target.value})} className="w-full bg-white border border-slate-200 p-4 rounded-xl outline-none font-bold text-slate-700"/></div>
+                <div><label className="text-[10px] font-bold text-red-400 uppercase ml-2 block mb-1">Payment Due Date *</label><input type="date" value={newInvoice.dueDate} onChange={e => setNewInvoice({...newInvoice, dueDate: e.target.value})} className="w-full bg-white border-2 border-red-100 focus:border-red-400 p-4 rounded-xl outline-none font-bold text-red-700 transition-colors"/></div>
               </div>
 
               <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
                 <div className="flex justify-between items-center mb-6 border-b border-slate-100 pb-4">
                   <h3 className="font-black text-slate-800 uppercase tracking-widest text-sm">Invoice Line Items</h3>
                   <select value={newInvoice.currency} onChange={e => setNewInvoice({...newInvoice, currency: e.target.value})} className="bg-slate-50 border border-slate-200 p-2 rounded-lg text-xs font-bold outline-none cursor-pointer">
-                    <option value={BASE_CURRENCY}>{BASE_CURRENCY}</option>
-                    <option value="USD">USD</option>
-                    <option value="EUR">EUR</option>
-                    <option value="GBP">GBP</option>
+                    <option value={BASE_CURRENCY}>{BASE_CURRENCY}</option><option value="USD">USD</option><option value="EUR">EUR</option><option value="GBP">GBP</option>
                   </select>
                 </div>
 
                 {newInvoice.items.map((item, index) => (
                   <div key={index} className="flex flex-col md:flex-row gap-3 mb-3 items-start md:items-center animate-in fade-in">
-                    <div className="flex-1 w-full">
-                      <input type="text" placeholder="Service Description..." value={item.desc} onChange={e => handleUpdateItem(index, 'desc', e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl outline-none text-sm font-bold text-slate-800 focus:border-slate-400"/>
-                    </div>
-                    <div className="w-full md:w-24">
-                      <input type="number" placeholder="Qty" value={item.qty} onChange={e => handleUpdateItem(index, 'qty', e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl outline-none text-sm font-bold text-center focus:border-slate-400"/>
-                    </div>
-                    <div className="w-full md:w-32 relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">{newInvoice.currency}</span>
-                      <input type="number" placeholder="Price" value={item.price} onChange={e => handleUpdateItem(index, 'price', e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-3 pl-10 rounded-xl outline-none text-sm font-bold text-right focus:border-slate-400"/>
-                    </div>
-                    <div className="w-full md:w-32 text-right font-black text-slate-800 pt-3 md:pt-0">
-                      {newInvoice.currency} {(item.qty * item.price).toLocaleString()}
-                    </div>
-                    {index > 0 ? (
-                      <button onClick={() => handleRemoveItem(index)} className="text-slate-300 hover:text-red-500 p-2"><Trash2 size={18}/></button>
-                    ) : <div className="w-9"></div>}
+                    <div className="flex-1 w-full"><input type="text" placeholder="Service Description..." value={item.desc} onChange={e => handleUpdateItem(index, 'desc', e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl outline-none text-sm font-bold text-slate-800 focus:border-slate-400"/></div>
+                    <div className="w-full md:w-24"><input type="number" placeholder="Qty" value={item.qty} onChange={e => handleUpdateItem(index, 'qty', e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl outline-none text-sm font-bold text-center focus:border-slate-400"/></div>
+                    <div className="w-full md:w-32 relative"><span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">{newInvoice.currency}</span><input type="number" placeholder="Price" value={item.price} onChange={e => handleUpdateItem(index, 'price', e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-3 pl-10 rounded-xl outline-none text-sm font-bold text-right focus:border-slate-400"/></div>
+                    <div className="w-full md:w-32 text-right font-black text-slate-800 pt-3 md:pt-0">{newInvoice.currency} {(item.qty * item.price).toLocaleString()}</div>
+                    {index > 0 ? (<button onClick={() => handleRemoveItem(index)} className="text-slate-300 hover:text-red-500 p-2"><Trash2 size={18}/></button>) : <div className="w-9"></div>}
                   </div>
                 ))}
                 
-                <button onClick={handleAddItem} className="mt-4 text-xs font-black uppercase tracking-widest flex items-center gap-1 transition-colors px-4 py-2 rounded-lg" style={{ color: user?.themeColor || '#0d9488', backgroundColor: `${user?.themeColor || '#0d9488'}20` }}><PlusCircle size={14}/> Add another item</button>
+                <button onClick={handleAddItem} className="mt-4 text-xs font-black uppercase tracking-widest flex items-center gap-1 transition-colors px-4 py-2 rounded-lg" style={{ color: APP_COLOR, backgroundColor: `${APP_COLOR}20` }}><PlusCircle size={14}/> Add another item</button>
               </div>
 
               <div className="flex flex-col items-end gap-3 w-full md:w-1/2 ml-auto bg-slate-100 p-6 rounded-2xl">
-                <div className="flex justify-between w-full items-center">
-                  <span className="text-slate-500 font-bold text-sm uppercase">Tax / VAT (%):</span>
-                  <input type="number" value={newInvoice.taxRate} onChange={e => setNewInvoice({...newInvoice, taxRate: Number(e.target.value)})} className="w-20 bg-white border border-slate-200 p-2 rounded-lg text-right font-bold outline-none text-sm"/>
-                </div>
-                <div className="flex justify-between w-full items-center border-b border-slate-200 pb-4">
-                  <span className="text-slate-500 font-bold text-sm uppercase">Discount ({newInvoice.currency}):</span>
-                  <input type="number" value={newInvoice.discount} onChange={e => setNewInvoice({...newInvoice, discount: Number(e.target.value)})} className="w-24 bg-white border border-slate-200 p-2 rounded-lg text-right font-bold outline-none text-sm text-orange-600"/>
-                </div>
-                <div className="flex justify-between w-full items-center mt-2">
-                  <span className="text-lg font-black text-slate-800 uppercase tracking-widest">Grand Total:</span>
-                  <span className="text-3xl font-black" style={{ color: user?.themeColor || '#0d9488' }}>{newInvoice.currency} {calculateTotals(newInvoice).total.toLocaleString()}</span>
-                </div>
+                <div className="flex justify-between w-full items-center"><span className="text-slate-500 font-bold text-sm uppercase">Tax / VAT (%):</span><input type="number" value={newInvoice.taxRate} onChange={e => setNewInvoice({...newInvoice, taxRate: Number(e.target.value)})} className="w-20 bg-white border border-slate-200 p-2 rounded-lg text-right font-bold outline-none text-sm"/></div>
+                <div className="flex justify-between w-full items-center border-b border-slate-200 pb-4"><span className="text-slate-500 font-bold text-sm uppercase">Discount ({newInvoice.currency}):</span><input type="number" value={newInvoice.discount} onChange={e => setNewInvoice({...newInvoice, discount: Number(e.target.value)})} className="w-24 bg-white border border-slate-200 p-2 rounded-lg text-right font-bold outline-none text-sm text-orange-600"/></div>
+                <div className="flex justify-between w-full items-center mt-2"><span className="text-lg font-black text-slate-800 uppercase tracking-widest">Grand Total:</span><span className="text-3xl font-black" style={{ color: APP_COLOR }}>{newInvoice.currency} {calculateTotals(newInvoice).total.toLocaleString()}</span></div>
               </div>
             </div>
 
             <div className="p-6 border-t border-slate-100 bg-white shrink-0">
               <button onClick={handleSaveInvoice} disabled={isSaving} className="w-full py-5 rounded-2xl font-black shadow-xl bg-slate-900 hover:bg-slate-800 text-white flex justify-center items-center gap-2 transition-all active:scale-95 disabled:opacity-70">
-                {isSaving ? <RefreshCw size={20} className="animate-spin"/> : <CheckCircle size={20}/>} 
-                {isSaving ? 'Saving to Cloud...' : 'Finalize & Generate Invoice'}
+                {isSaving ? <RefreshCw size={20} className="animate-spin"/> : <CheckCircle size={20}/>} {isSaving ? 'Saving to Cloud...' : 'Finalize & Generate Invoice'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL 2: INVOICE PREVIEW & RECORD PAYMENT */}
+      {/* =======================================================
+          MODAL 2: B2B INVOICE PREVIEW & RECORD PAYMENT 
+          ======================================================= */}
       {isViewModalOpen && selectedInvoice && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm no-print" onClick={() => setIsViewModalOpen(false)}></div>
@@ -482,20 +673,18 @@ const Invoices: React.FC = () => {
               
               <div className="flex justify-between items-start border-b-2 border-slate-800 pb-8 mb-8">
                 <div>
-                  {/* 🌟 DYNAMIC LOGO INJECTION */}
-                  {user?.companyLogo ? (
-                      <img src={user.companyLogo} alt="Company Logo" className="h-16 object-contain mb-4" />
+                  {settings?.company_logo ? (
+                      <img src={settings.company_logo} alt="Company Logo" className="h-16 object-contain mb-4" />
                   ) : (
                       <h2 className="text-4xl font-black text-slate-900 tracking-tighter">INVOICE</h2>
                   )}
                   <p className="text-slate-400 font-mono font-bold tracking-widest">INV-{String(selectedInvoice.id).slice(0, 8)}</p>
                 </div>
                 <div className="text-right">
-                  {/* 🌟 DYNAMIC COMPANY DETAILS */}
-                  <h3 className="text-xl font-black" style={{ color: user?.themeColor || '#0d9488' }}>{user?.companyName || 'Travel Agency'}</h3>
+                  <h3 className="text-xl font-black" style={{ color: APP_COLOR }}>{settings?.company_name || 'Travel Agency'}</h3>
                   <p className="text-xs text-slate-500 font-medium mt-1 leading-relaxed">
-                      {user?.address || 'Head Office'}<br/>
-                      {user?.supportEmail || ''} 
+                      {settings?.address || 'Head Office'}<br/>
+                      {settings?.support_email || ''} 
                   </p>
                 </div>
               </div>
@@ -549,43 +738,18 @@ const Invoices: React.FC = () => {
 
               <div className="flex justify-end">
                 <div className="w-full md:w-1/2 space-y-3">
-                  <div className="flex justify-between text-sm text-slate-500 font-bold">
-                    <span>Subtotal</span>
-                    <span>{selectedInvoice.currency} {selectedInvoice.subtotal?.toLocaleString()}</span>
-                  </div>
-                  {selectedInvoice.taxRate > 0 && (
-                    <div className="flex justify-between text-sm text-slate-500 font-bold">
-                      <span>Tax / VAT ({selectedInvoice.taxRate}%)</span>
-                      <span>{selectedInvoice.currency} {((selectedInvoice.subtotal * selectedInvoice.taxRate) / 100).toLocaleString()}</span>
-                    </div>
-                  )}
-                  {selectedInvoice.discount > 0 && (
-                    <div className="flex justify-between text-sm text-orange-600 font-bold">
-                      <span>Discount</span>
-                      <span>- {selectedInvoice.currency} {selectedInvoice.discount?.toLocaleString()}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between items-center border-t-2 border-slate-800 pt-3 mt-3">
-                    <span className="text-sm font-black text-slate-800 uppercase tracking-widest">Total Billed</span>
-                    <span className="text-xl font-black text-slate-800">{selectedInvoice.currency} {selectedInvoice.total?.toLocaleString()}</span>
-                  </div>
-                  
-                  {(selectedInvoice.amountPaid > 0) && (
-                    <div className="flex justify-between items-center pt-2 text-green-600">
-                      <span className="text-xs font-bold uppercase tracking-widest">Payments Applied</span>
-                      <span className="text-lg font-black">- {selectedInvoice.currency} {selectedInvoice.amountPaid?.toLocaleString()}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between items-center border-t-2 border-slate-200 pt-4 mt-4 bg-slate-50 p-4 rounded-xl">
-                    <span className="text-sm font-black text-slate-800 uppercase tracking-widest">Balance Due</span>
-                    <span className="text-3xl font-black" style={{ color: user?.themeColor || '#0d9488' }}>{selectedInvoice.currency} {Math.max(0, selectedInvoice.total - (selectedInvoice.amountPaid || 0)).toLocaleString()}</span>
-                  </div>
+                  <div className="flex justify-between text-sm text-slate-500 font-bold"><span>Subtotal</span><span>{selectedInvoice.currency} {selectedInvoice.subtotal?.toLocaleString()}</span></div>
+                  {selectedInvoice.taxRate > 0 && (<div className="flex justify-between text-sm text-slate-500 font-bold"><span>Tax / VAT ({selectedInvoice.taxRate}%)</span><span>{selectedInvoice.currency} {((selectedInvoice.subtotal * selectedInvoice.taxRate) / 100).toLocaleString()}</span></div>)}
+                  {selectedInvoice.discount > 0 && (<div className="flex justify-between text-sm text-orange-600 font-bold"><span>Discount</span><span>- {selectedInvoice.currency} {selectedInvoice.discount?.toLocaleString()}</span></div>)}
+                  <div className="flex justify-between items-center border-t-2 border-slate-800 pt-3 mt-3"><span className="text-sm font-black text-slate-800 uppercase tracking-widest">Total Billed</span><span className="text-xl font-black text-slate-800">{selectedInvoice.currency} {selectedInvoice.total?.toLocaleString()}</span></div>
+                  {(selectedInvoice.amountPaid > 0) && (<div className="flex justify-between items-center pt-2 text-green-600"><span className="text-xs font-bold uppercase tracking-widest">Payments Applied</span><span className="text-lg font-black">- {selectedInvoice.currency} {selectedInvoice.amountPaid?.toLocaleString()}</span></div>)}
+                  <div className="flex justify-between items-center border-t-2 border-slate-200 pt-4 mt-4 bg-slate-50 p-4 rounded-xl"><span className="text-sm font-black text-slate-800 uppercase tracking-widest">Balance Due</span><span className="text-3xl font-black" style={{ color: APP_COLOR }}>{selectedInvoice.currency} {Math.max(0, selectedInvoice.total - (selectedInvoice.amountPaid || 0)).toLocaleString()}</span></div>
                 </div>
               </div>
 
               <div className="mt-20 pt-8 border-t border-slate-100 text-xs text-slate-500 text-center font-medium leading-relaxed">
                 <p className="font-black text-slate-800 mb-2 uppercase tracking-widest text-[10px]">Payment Instructions</p>
-                <p>Please make all cheques payable to <strong>{user?.companyName || 'Us'}</strong>.</p>
+                <p>Please make all cheques payable to <strong>{settings?.company_name || 'Us'}</strong>.</p>
                 <p className="mt-2">Thank you for your business!</p>
               </div>
             </div>
@@ -604,7 +768,7 @@ const Invoices: React.FC = () => {
               {/* Partial Payment Interface */}
               {selectedInvoice.status !== 'Paid' && (
                 <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-inner">
-                  <h4 className="font-black mb-4 flex items-center gap-2 uppercase tracking-widest text-xs" style={{ color: user?.themeColor || '#4fd1c5' }}><CreditCard size={16}/> Log Payment</h4>
+                  <h4 className="font-black mb-4 flex items-center gap-2 uppercase tracking-widest text-xs" style={{ color: APP_COLOR }}><CreditCard size={16}/> Log Payment</h4>
                   <label className="text-[10px] font-bold text-slate-400 uppercase block mb-2">Amount Received ({selectedInvoice.currency})</label>
                   <input 
                     type="number" 
@@ -613,7 +777,7 @@ const Invoices: React.FC = () => {
                     placeholder={(selectedInvoice.total - (selectedInvoice.amountPaid || 0)).toString()} 
                     className="w-full bg-slate-900 border-2 border-slate-700 focus:border-slate-500 p-4 rounded-xl outline-none font-black text-3xl text-white mb-4 transition-colors text-center"
                   />
-                  <button onClick={handleRecordPayment} className="w-full text-white py-4 rounded-xl font-black text-sm transition-all shadow-lg" style={{ backgroundColor: user?.themeColor || '#0d9488' }}>
+                  <button onClick={handleRecordPayment} className="w-full text-white py-4 rounded-xl font-black text-sm transition-all shadow-lg" style={{ backgroundColor: APP_COLOR }}>
                     Apply to Ledger
                   </button>
                 </div>

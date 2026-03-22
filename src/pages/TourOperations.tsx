@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useTenant } from '../contexts/TenantContext'; 
 import { supabase } from '../lib/supabase';
+import { logAudit } from '../lib/auditLogger';
 import { useNavigate } from 'react-router-dom'; 
 import { 
   Users, CheckCircle, Clock, MapPin, Send, Plus, X, Pencil, Save, Wallet,
   Navigation, CloudUpload, RefreshCw, BedDouble, Utensils, 
   HeartPulse, Briefcase, Search, UserCheck, Trash2, Globe, ListPlus,
-  CloudOff, ChevronUp, ChevronDown, Link, AlertCircle, LinkIcon
+  CloudOff, ChevronUp, ChevronDown, Link, AlertCircle, LinkIcon, Eye,
+  Bell, Share2 // 🌟 Added Share2 for WhatsApp button
 } from 'lucide-react';
 
 // =========================================================================
@@ -53,6 +55,7 @@ interface Passenger {
   boarded?: boolean;
   amount_paid?: number | string;
   payment_status?: string;
+  trips?: { title: string }; // For notification joining
 }
 
 interface SyncAction {
@@ -68,10 +71,10 @@ interface SyncAction {
 // =========================================================================
 
 const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
-  const APP_COLOR = user?.themeColor || '#0d9488';
-  const BASE_CURRENCY = user?.currency || 'GHS';
+  const { settings } = useTenant(); 
+  const APP_COLOR = settings?.theme_color || '#0d9488';
+  const BASE_CURRENCY = settings?.currency || 'GHS';
 
-  // 🌟 SECURITY: Check if user has permission to delete trips
   const canDeleteTrip = ['Finance', 'Operations', 'CEO', 'PROADMIN'].includes(user?.role);
 
   const [trips, setTrips] = useState<Trip[]>([]);
@@ -89,6 +92,29 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
   
   const [isEditingPax, setIsEditingPax] = useState<boolean>(false);
   const [paxForm, setPaxForm] = useState<Partial<Passenger>>({});
+  const [previewBookingId, setPreviewBookingId] = useState<string | null>(null);
+
+  // 🌟 NOTIFICATIONS & VERIFICATION STATE
+  const [pendingVerifications, setPendingVerifications] = useState<Passenger[]>([]);
+  const [isNotifOpen, setIsNotifOpen] = useState<boolean>(false);
+  const [verifiedPax, setVerifiedPax] = useState<Passenger | null>(null); // 🌟 NEW: Controls the Success Modal
+  const notifRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      // If the menu is open AND the click was NOT inside the notifRef container
+      if (notifRef.current && !notifRef.current.contains(event.target as Node)) {
+        setIsNotifOpen(false);
+      }
+    };
+
+    // Attach listener
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      // Cleanup listener on unmount
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   // 🟢 OFFLINE SYNC STATE ENGINE
   const [isOnline, setIsOnline] = useState<boolean>(navigator.onLine);
@@ -104,7 +130,6 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
 
   const processSyncQueue = useCallback(async () => {
       if (!navigator.onLine || pendingSyncs.length === 0 || isSyncing) return;
-      
       setIsSyncing(true);
       const remaining = [...pendingSyncs];
 
@@ -123,7 +148,6 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
               break; 
           }
       }
-      
       setPendingSyncs(remaining);
       setIsSyncing(false);
   }, [pendingSyncs, isSyncing]);
@@ -150,10 +174,12 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
     try {
       if (!user?.subscriberId) return;
 
-      const [tripsResponse, suppliersResponse, staffResponse] = await Promise.all([
+      const [tripsResponse, suppliersResponse, staffResponse, pendingResponse] = await Promise.all([
         supabase.from('trips').select('*').eq('subscriber_id', user.subscriberId),
         supabase.from('suppliers').select('*').eq('subscriber_id', user.subscriberId),
-        supabase.from('staff').select('*').eq('subscriber_id', user.subscriberId)
+        supabase.from('staff').select('*').eq('subscriber_id', user.subscriberId),
+        // 🌟 Fetch passengers awaiting verification
+        supabase.from('passengers').select('*, trips(title)').eq('subscriber_id', user.subscriberId).ilike('payment_status', '%Pending%').order('created_at', { ascending: false })
       ]);
 
       if (tripsResponse.data) {
@@ -161,21 +187,14 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
          let paxCounts: Record<string, number> = {};
          
          if (tripIds.length > 0) {
-             const { data: paxData } = await supabase
-                 .from('passengers')
-                 .select('trip_id')
-                 .in('trip_id', tripIds);
-                 
+             const { data: paxData } = await supabase.from('passengers').select('trip_id').in('trip_id', tripIds);
              if (paxData) {
-                 paxData.forEach(pax => {
-                     paxCounts[pax.trip_id] = (paxCounts[pax.trip_id] || 0) + 1;
-                 });
+                 paxData.forEach(pax => { paxCounts[pax.trip_id] = (paxCounts[pax.trip_id] || 0) + 1; });
              }
          }
 
          const tripsWithLiveCounts = tripsResponse.data.map(trip => ({
-             ...trip,
-             passenger_count: paxCounts[trip.id] || 0
+             ...trip, passenger_count: paxCounts[trip.id] || 0
          }));
 
          setTrips(tripsWithLiveCounts);
@@ -183,6 +202,7 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
       
       if (suppliersResponse.data) setSuppliersDb(suppliersResponse.data);
       if (staffResponse.data) setStaffDb(staffResponse.data);
+      if (pendingResponse.data) setPendingVerifications(pendingResponse.data as Passenger[]);
 
     } catch (e) { console.error("Database Sync Error:", e); } 
     finally { setLoading(false); }
@@ -190,15 +210,46 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
 
   useEffect(() => { fetchData(); }, [user?.subscriberId]);
 
+  // 🌟 UNIFIED VERIFICATION HANDLER
+  const handleVerifyPayment = async (pax: Passenger) => {
+      if(window.confirm(`Verify funds received for ${pax.first_name}? This will instantly unlock their Digital Passport.`)) {
+          const newStatus = 'Full'; // Mark as Full/Verified
+          
+          // Optimistically remove from notifications
+          setPendingVerifications(prev => prev.filter(p => String(p.id) !== String(pax.id)));
+          
+          // Optimistically update manifest if it's currently open
+          setManifestData(prev => prev.map(p => String(p.id) === String(pax.id) ? { ...p, payment_status: newStatus } : p));
+
+          try {
+              if (!navigator.onLine) throw new Error("Offline");
+              
+              // Update Both Tables to Ensure Sync
+              await Promise.all([
+                 supabase.from('passengers').update({ payment_status: newStatus }).eq('id', pax.id),
+                 supabase.from('bookings').update({ payment_status: newStatus }).eq('id', pax.booking_id)
+              ]);
+              
+              await logAudit(user?.subscriberId || '', user?.fullName || 'System', user?.role || '', 'Verified Payment', `Verified offline payment for ${pax.first_name} ${pax.last_name}.`);
+              
+              // 🌟 Trigger the Success Modal
+              setVerifiedPax(pax);
+              setIsNotifOpen(false);
+
+          } catch (e) {
+              setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'passengers', action: 'UPDATE', recordId: pax.id, payload: { payment_status: newStatus } }]);
+              // Still show the modal even if offline
+              setVerifiedPax(pax);
+              setIsNotifOpen(false);
+          }
+      }
+  };
+
   // --- MANIFEST ACTIONS ---
   const handleOpenManifest = async (trip: Trip) => {
     setSelectedTrip(trip);
     try {
-        const { data, error } = await supabase
-            .from('passengers')
-            .select('*, bookings(amount_paid, payment_status)')
-            .eq('trip_id', trip.id);
-
+        const { data, error } = await supabase.from('passengers').select('*, bookings(amount_paid, payment_status)').eq('trip_id', trip.id);
         if (error) throw error;
 
         const enrichedManifest = (data || []).map((pax: any) => {
@@ -206,19 +257,11 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
             let finalStatus = pax.payment_status;
 
             if (pax.bookings) {
-                if (finalAmount === 0 && pax.is_lead) {
-                    finalAmount = Number(pax.bookings.amount_paid) || 0;
-                }
-                if (!finalStatus || finalStatus === 'Pending') {
-                    finalStatus = pax.bookings.payment_status || 'Pending';
-                }
+                if (finalAmount === 0 && pax.is_lead) { finalAmount = Number(pax.bookings.amount_paid) || 0; }
+                if (!finalStatus || finalStatus === 'Pending') { finalStatus = pax.bookings.payment_status || 'Pending'; }
             }
 
-            return {
-                ...pax,
-                amount_paid: finalAmount,
-                payment_status: finalStatus || 'Pending'
-            };
+            return { ...pax, amount_paid: finalAmount, payment_status: finalStatus || 'Pending' };
         });
 
         setManifestData(enrichedManifest);
@@ -226,10 +269,7 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
         if (data && data.length !== trip.passenger_count) {
             setTrips(prev => prev.map(t => t.id === trip.id ? { ...t, passenger_count: data.length } : t));
             setSelectedTrip(prev => ({ ...prev!, passenger_count: data.length }));
-            
-            if (navigator.onLine) {
-                await supabase.from('trips').update({ passenger_count: data.length }).eq('id', trip.id);
-            }
+            if (navigator.onLine) await supabase.from('trips').update({ passenger_count: data.length }).eq('id', trip.id);
         }
     } catch (e) { console.error("Manifest Load Error:", e); }
   };
@@ -237,22 +277,18 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
   const handleToggleBoarding = async (pax: Passenger) => {
       const newStatus = !pax.boarded;
       setManifestData(prev => prev.map(p => String(p.id) === String(pax.id) ? { ...p, boarded: newStatus } : p));
-      
       try {
           if (!navigator.onLine) throw new Error("Offline mode active");
           const { error } = await supabase.from('passengers').update({ boarded: newStatus }).eq('id', pax.id);
           if (error) throw error;
       } catch (e) { 
-          setPendingSyncs(prev => [...prev, {
-              id: Date.now(), table: 'passengers', action: 'UPDATE', recordId: pax.id, payload: { boarded: newStatus }
-          }]);
+          setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'passengers', action: 'UPDATE', recordId: pax.id, payload: { boarded: newStatus } }]);
       }
   };
 
   const handleDeletePassenger = async (paxId: string | number, paxName: string) => {
       if(window.confirm(`Remove ${paxName} from this manifest permanently?`)) {
           setManifestData(prev => prev.filter(p => String(p.id) !== String(paxId)));
-          
           let newCount = 0;
           if (selectedTrip) {
               newCount = Math.max(0, (selectedTrip.passenger_count || 1) - 1);
@@ -264,35 +300,20 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
               if (!navigator.onLine) throw new Error("Offline");
               const { error } = await supabase.from('passengers').delete().eq('id', paxId);
               if (error) throw error;
-
-              if (selectedTrip) {
-                 await supabase.from('trips').update({ passenger_count: newCount }).eq('id', selectedTrip.id);
-              }
+              if (selectedTrip) await supabase.from('trips').update({ passenger_count: newCount }).eq('id', selectedTrip.id);
           } catch(e) {
               setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'passengers', action: 'DELETE', recordId: paxId, payload: {} }]);
-              if (selectedTrip) {
-                  setPendingSyncs(prev => [...prev, { id: Date.now() + 1, table: 'trips', action: 'UPDATE', recordId: selectedTrip.id, payload: { passenger_count: newCount } }]);
-              }
+              if (selectedTrip) setPendingSyncs(prev => [...prev, { id: Date.now() + 1, table: 'trips', action: 'UPDATE', recordId: selectedTrip.id, payload: { passenger_count: newCount } }]);
           }
       }
   };
 
   const handleSavePassenger = async () => {
     const cleanAmount = Number(paxForm.amount_paid) || 0;
-    
     const payload = {
-        title: paxForm.title, 
-        first_name: paxForm.first_name, 
-        last_name: paxForm.last_name,
-        phone: paxForm.phone, 
-        email: paxForm.email, 
-        passport_no: paxForm.passport_no,
-        room_preference: paxForm.room_preference, 
-        requested_roommate: paxForm.requested_roommate,
-        amount_paid: cleanAmount, 
-        payment_status: paxForm.payment_status || 'Pending',
-        dietary_needs: paxForm.dietary_needs, 
-        medical_info: paxForm.medical_info
+        title: paxForm.title, first_name: paxForm.first_name, last_name: paxForm.last_name, phone: paxForm.phone, email: paxForm.email, 
+        passport_no: paxForm.passport_no, room_preference: paxForm.room_preference, requested_roommate: paxForm.requested_roommate,
+        amount_paid: cleanAmount, payment_status: paxForm.payment_status || 'Pending', dietary_needs: paxForm.dietary_needs, medical_info: paxForm.medical_info
     };
 
     setIsEditingPax(false);
@@ -300,7 +321,7 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
 
     try {
       if (!navigator.onLine) throw new Error("Offline");
-      const { data, error } = await supabase.from('passengers').update(payload).eq('id', paxForm.id).select();
+      const { error } = await supabase.from('passengers').update(payload).eq('id', paxForm.id);
       if (error) throw error;
     } catch (e: any) { 
       setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'passengers', action: 'UPDATE', recordId: paxForm.id as string, payload: payload }]);
@@ -309,12 +330,19 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
 
   // --- TRIP ACTIONS ---
   const handleUpdateTripStatus = async (tripId: string | number, newStatus: string) => {
+    const targetTrip = trips.find(t => t.id === tripId);
+    if(!targetTrip) return;
+
     setTrips(prev => prev.map(t => t.id === tripId ? { ...t, status: newStatus } : t));
 
     try {
       if (!navigator.onLine) throw new Error("Offline");
       const { error } = await supabase.from('trips').update({ status: newStatus }).eq('id', tripId);
       if (error) throw error;
+      
+      if(user?.subscriberId) {
+          await logAudit(user.subscriberId, user.fullName || user.username || 'System', user.role, 'Trip Status Updated', `Changed status of trip "${targetTrip.title}" to ${newStatus}.`);
+      }
     } catch (e) {
       setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'trips', action: 'UPDATE', recordId: tripId, payload: { status: newStatus } }]);
     }
@@ -323,7 +351,10 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
   const handleDeleteTrip = async (tripId: string | number, tripTitle: string) => {
       if(window.confirm(`⚠️ DANGER: Delete "${tripTitle}" and ALL its passengers?`)) {
           const { error } = await supabase.from('trips').delete().eq('id', tripId);
-          if (!error) setTrips(prev => prev.filter(t => t.id !== tripId));
+          if (!error) {
+              setTrips(prev => prev.filter(t => t.id !== tripId));
+              if(user?.subscriberId) await logAudit(user.subscriberId, user.fullName || user.username || 'System', user.role, 'Deleted Master Trip', `Permanently deleted master trip profile: "${tripTitle}".`);
+          }
       }
   };
 
@@ -332,12 +363,8 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
           ...trip,
           start_date: trip.start_date ? new Date(trip.start_date).toISOString().split('T')[0] : '',
           end_date: trip.end_date ? new Date(trip.end_date).toISOString().split('T')[0] : '',
-          marketing_data: trip.marketing_data || {},
-          financials: trip.financials || {},
-          terms: trip.terms || {},
-          logistics: trip.logistics || { vendors: [] },
-          itinerary: trip.itinerary || [],
-          transport_modes: trip.transport_modes || ['Bus']
+          marketing_data: trip.marketing_data || {}, financials: trip.financials || {}, terms: trip.terms || {},
+          logistics: trip.logistics || { vendors: [] }, itinerary: trip.itinerary || [], transport_modes: trip.transport_modes || ['Bus']
       });
       setEditTab('basics');
       setIsEditingTrip(true);
@@ -345,10 +372,8 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
 
   const handleSaveMasterTrip = async () => {
     const payload = {
-        title: tripForm.title, subtitle: tripForm.subtitle, description: tripForm.description,
-        start_date: tripForm.start_date, end_date: tripForm.end_date, capacity: tripForm.capacity,
-        marketing_data: tripForm.marketing_data, financials: tripForm.financials, terms: tripForm.terms,
-        logistics: tripForm.logistics, itinerary: tripForm.itinerary, transport_modes: tripForm.transport_modes
+        title: tripForm.title, subtitle: tripForm.subtitle, description: tripForm.description, start_date: tripForm.start_date, end_date: tripForm.end_date, capacity: tripForm.capacity,
+        marketing_data: tripForm.marketing_data, financials: tripForm.financials, terms: tripForm.terms, logistics: tripForm.logistics, itinerary: tripForm.itinerary, transport_modes: tripForm.transport_modes
     };
 
     setIsEditingTrip(false);
@@ -358,16 +383,13 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
       if (!navigator.onLine) throw new Error("Offline");
       const { error } = await supabase.from('trips').update(payload).eq('id', tripForm.id);
       if (error) throw error;
+      if(user?.subscriberId) await logAudit(user.subscriberId, user.fullName || user.username || 'System', user.role, 'Edited Master Trip Profile', `Saved changes to trip details for: "${tripForm.title}".`);
     } catch (e) {
       setPendingSyncs(prev => [...prev, { id: Date.now(), table: 'trips', action: 'UPDATE', recordId: tripForm.id as string, payload: payload }]);
     }
   };
 
-  const handleUpdateItinerary = (id: number, field: string, value: any) => {
-      setTripForm(prev => ({
-          ...prev, itinerary: prev.itinerary?.map(step => step.id === id ? { ...step, [field]: value } : step)
-      }));
-  };
+  const handleUpdateItinerary = (id: number, field: string, value: any) => { setTripForm(prev => ({ ...prev, itinerary: prev.itinerary?.map(step => step.id === id ? { ...step, [field]: value } : step) })); };
 
   const moveItineraryStep = (index: number, direction: 'up' | 'down') => {
       const newItinerary = [...(tripForm.itinerary || [])];
@@ -384,13 +406,12 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
   };
 
   const filteredTrips = trips.filter(t => t.title?.toLowerCase().includes(searchTerm.toLowerCase()) || t.trip_ref?.toLowerCase().includes(searchTerm.toLowerCase()));
-
   const supplierCategories = Array.from(new Set(suppliersDb.map(s => s.category || 'Other')));
 
   return (
     <div className="animate-fade-in pb-20">
       
-      {/* HEADER WITH OFFLINE STATUS */}
+      {/* HEADER WITH OFFLINE STATUS & NOTIFICATIONS */}
       <header className="mb-10 flex flex-col md:flex-row md:items-end justify-between gap-6">
         <div>
           <div className="flex items-center gap-4">
@@ -403,14 +424,59 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                     {pendingSyncs.length} Pending
                  </div>
              ) : (
-                 <div className="flex items-center gap-1 text-slate-300" title="Cloud Synced">
-                    <CloudUpload size={20}/>
-                 </div>
+                 <div className="flex items-center gap-1 text-slate-300" title="Cloud Synced"><CloudUpload size={20}/></div>
              )}
           </div>
           <p className="text-slate-500 font-medium mt-1">Live management of dispatch, manifests, and traveler safety.</p>
         </div>
-        <div className="flex items-center gap-3 w-full md:w-auto">
+        <div className="flex items-center gap-3 w-full md:w-auto relative">
+           
+           {/* 🌟 NOTIFICATIONS BELL */}
+           <div className="relative" ref={notifRef}>
+             <button 
+                onClick={() => setIsNotifOpen(!isNotifOpen)} 
+                className="p-3.5 bg-white border border-slate-200 shadow-sm rounded-2xl hover:bg-slate-50 transition-all text-slate-600 relative"
+             >
+                <Bell size={20} />
+                {pendingVerifications.length > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-black w-5 h-5 flex items-center justify-center rounded-full shadow-md animate-bounce">
+                    {pendingVerifications.length}
+                  </span>
+                )}
+             </button>
+
+             {/* DROPDOWN PANEL */}
+             {isNotifOpen && (
+                <div className="absolute right-0 mt-3 w-80 bg-white rounded-3xl shadow-2xl border border-slate-100 z-50 overflow-hidden animate-in fade-in slide-in-from-top-2">
+                   <div className="p-4 bg-slate-900 text-white flex justify-between items-center">
+                      <h4 className="font-black text-sm uppercase tracking-widest">Action Required</h4>
+                      <span className="bg-red-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full">{pendingVerifications.length} Pending</span>
+                   </div>
+                   <div className="max-h-96 overflow-y-auto p-2">
+                      {pendingVerifications.length === 0 ? (
+                        <div className="p-8 text-center flex flex-col items-center gap-2">
+                            <CheckCircle size={32} className="text-emerald-200"/>
+                            <p className="text-slate-400 font-bold text-sm">All payments verified.</p>
+                        </div>
+                      ) : (
+                        pendingVerifications.map(pax => (
+                           <div key={pax.id} className="p-4 border-b border-slate-50 hover:bg-slate-50 transition-colors rounded-xl">
+                              <p className="text-[10px] font-black uppercase text-slate-400 mb-1 tracking-widest truncate">{pax.trips?.title || 'Unknown Trip'}</p>
+                              <p className="text-sm font-black text-slate-800">{pax.first_name} {pax.last_name}</p>
+                              <div className="flex justify-between items-center mt-3">
+                                 <span className="text-[10px] font-black text-orange-600 bg-orange-100 px-2 py-1 rounded-md uppercase tracking-widest">{pax.payment_status}</span>
+                                 <button onClick={() => handleVerifyPayment(pax)} className="bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl transition-all shadow-md active:scale-95 flex items-center gap-1">
+                                     <CheckCircle size={12}/> Verify
+                                 </button>
+                              </div>
+                           </div>
+                        ))
+                      )}
+                   </div>
+                </div>
+             )}
+           </div>
+
            <div className="relative flex-1 md:w-64">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18}/>
               <input type="text" placeholder="Search Trip Ref / Name..." className="w-full bg-white border border-slate-200 pl-11 pr-4 py-3 rounded-2xl outline-none focus:ring-2 ring-teal-500/20 font-medium" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
@@ -438,7 +504,6 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                       <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-[0.1em] ${trip.status === 'Dispatched' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                         {trip.status}
                       </span>
-                      {/* 🌟 SECURITY FIX: Only allow specific roles to delete */}
                       {canDeleteTrip && (
                           <button onClick={() => handleDeleteTrip(trip.id, trip.title)} className="text-slate-300 hover:text-red-500 transition-colors p-2" title="Delete Trip"><Trash2 size={18}/></button>
                       )}
@@ -481,7 +546,6 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                         <Users size={16}/> Manifest
                       </button>
                       
-                      {/* 🌟 NEW SHARE BUTTON */}
                       <button 
                         onClick={() => {
                             const url = `${window.location.origin}/book/${trip.id}`;
@@ -507,6 +571,56 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                 </div>
               );
           })}
+        </div>
+      )}
+
+      {/* 🌟 VERIFICATION SUCCESS / SHARE MODAL */}
+      {verifiedPax && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-slate-900/90 backdrop-blur-md">
+           <div className="bg-white w-full max-w-md rounded-[3rem] shadow-2xl p-10 text-center animate-in zoom-in-95 duration-300">
+              <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                 <CheckCircle size={40} />
+              </div>
+              <h2 className="text-3xl font-black text-slate-800 mb-2">Verification Complete</h2>
+              <p className="text-slate-500 font-medium mb-8">Funds for <strong>{verifiedPax.first_name}</strong> have been verified. Their Digital Passport is now fully unlocked.</p>
+              
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex items-center gap-3 mb-6 text-left overflow-hidden">
+                 <LinkIcon size={20} className="text-slate-400 shrink-0"/>
+                 <span className="text-[10px] font-mono font-bold text-slate-500 truncate">{window.location.origin}/passport/{verifiedPax.booking_id}</span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3">
+                 <button 
+                   onClick={() => {
+                      const url = `${window.location.origin}/passport/${verifiedPax.booking_id}`;
+                      const msg = `Hi ${verifiedPax.first_name}! Your payment is verified. Here is your Digital Passport for the trip: ${url}`;
+                      window.open(`https://wa.me/${verifiedPax.phone?.replace(/\D/g,'')}?text=${encodeURIComponent(msg)}`);
+                   }}
+                   className="w-full bg-emerald-600 hover:bg-emerald-500 text-white py-4 rounded-2xl font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all"
+                 >
+                    <Share2 size={18}/> Share on WhatsApp
+                 </button>
+                 <button 
+                   onClick={() => {
+                      navigator.clipboard.writeText(`${window.location.origin}/passport/${verifiedPax.booking_id}`);
+                      alert("Link Copied!");
+                   }}
+                   className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 py-4 rounded-2xl font-black uppercase tracking-widest transition-all"
+                 >
+                    Copy Link
+                 </button>
+                 <button 
+                    onClick={() => {
+                        setPreviewBookingId(String(verifiedPax.booking_id));
+                        setVerifiedPax(null);
+                    }}
+                    className="w-full mt-2 text-blue-500 font-bold text-sm uppercase tracking-widest flex items-center justify-center gap-2 hover:text-blue-600 transition-colors"
+                 >
+                    <Eye size={16}/> View Digital Passport
+                 </button>
+                 <button onClick={() => setVerifiedPax(null)} className="mt-4 text-slate-400 font-bold text-sm uppercase tracking-widest hover:text-slate-600 transition-colors">Close</button>
+              </div>
+           </div>
         </div>
       )}
 
@@ -579,13 +693,12 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                          </div>
                      )}
 
-                     {/* 🌟 UPGRADED TAB: LOGISTICS & SUPPLIERS */}
+                     {/* TAB: LOGISTICS */}
                      {editTab === 'logistics' && (
                          <div className="space-y-6">
                             <h3 className="text-xl font-black text-slate-800 mb-6 border-b pb-2">Vendors, Fleet & Staff</h3>
                             
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                {/* STAFF ASSIGNMENTS */}
                                 <div className="space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-100">
                                     <h4 className="font-black text-slate-700 mb-2 flex items-center gap-2"><UserCheck size={16}/> Field Team</h4>
                                     <div>
@@ -604,7 +717,6 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                                     </div>
                                 </div>
 
-                                {/* SUPPLIER ASSIGNMENTS (Dynamic Engine) */}
                                 <div className="space-y-4 bg-slate-50 p-6 rounded-3xl border border-slate-100">
                                     <h4 className="font-black text-slate-700 mb-2 flex items-center gap-2"><Briefcase size={16}/> External Vendors</h4>
                                     
@@ -667,7 +779,7 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                          </div>
                      )}
 
-                     {/* 🌟 UPGRADED TAB: ITINERARY */}
+                     {/* TAB: ITINERARY */}
                      {editTab === 'itinerary' && (
                          <div className="space-y-6">
                             <h3 className="text-xl font-black text-slate-800 mb-6 border-b pb-2">Daily Itinerary & Activities</h3>
@@ -676,7 +788,6 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                                 {tripForm.itinerary?.map((step, index) => (
                                     <div key={step.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 flex flex-col gap-4 relative pr-16 shadow-sm group hover:border-slate-300 transition-all">
                                         
-                                        {/* Drag & Drop / Reordering Controls */}
                                         <div className="absolute right-4 top-1/2 -translate-y-1/2 flex flex-col gap-1 opacity-50 group-hover:opacity-100 transition-opacity">
                                             <button onClick={() => moveItineraryStep(index, 'up')} disabled={index === 0} className="p-1.5 bg-white rounded-lg shadow-sm border text-slate-500 hover:text-slate-900 disabled:opacity-30 disabled:cursor-not-allowed"><ChevronUp size={16}/></button>
                                             <button onClick={() => moveItineraryStep(index, 'down')} disabled={index === (tripForm.itinerary?.length || 0) - 1} className="p-1.5 bg-white rounded-lg shadow-sm border text-slate-500 hover:text-slate-900 disabled:opacity-30 disabled:cursor-not-allowed"><ChevronDown size={16}/></button>
@@ -731,7 +842,6 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                   </div>
               </div>
 
-              {/* Modal Footer */}
               <div className="p-6 border-t bg-slate-50 flex justify-end rounded-b-[3rem]">
                   <button onClick={handleSaveMasterTrip} className="text-white px-10 py-5 rounded-2xl font-black text-lg shadow-xl hover:scale-105 active:scale-95 transition-all flex items-center gap-3" style={{ backgroundColor: APP_COLOR }}>
                       <Save size={22}/> Save Master Profile
@@ -773,88 +883,82 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                           <th className="px-6 py-4 text-center">Actions</th>
                        </tr>
                     </thead>
-                    {/* Inside TourOperations.tsx, locate the Manifest table body and replace the <tbody> with this: */}
+                    <tbody>
+                       {manifestData.map((pax) => {
+                         const needsVerification = pax.payment_status !== 'Full';
 
-                        <tbody>
-                        {manifestData.map((pax) => {
-                            // Check if payment is pending verification
-                            const isPending = pax.payment_status?.includes('Pending');
+                         return (
+                           <tr key={pax.id} className={`group shadow-sm transition-all ${pax.is_lead ? 'bg-slate-50 ring-1 ring-slate-200' : 'bg-white border-y border-slate-50 hover:bg-slate-50'}`}>
+                               <td className="px-6 py-5 text-center rounded-l-[2rem]">
+                                   <button onClick={() => handleToggleBoarding(pax)} className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${pax.boarded ? 'text-white shadow-lg' : 'bg-slate-50 text-slate-200 border-2 border-dashed border-slate-200 hover:border-teal-200'}`} style={pax.boarded ? { backgroundColor: APP_COLOR } : {}}><CheckCircle size={22}/></button>
+                               </td>
+                               <td className="px-6 py-5">
+                                   <div className="flex items-center gap-4">
+                                       <div className={`w-12 h-12 rounded-full flex items-center justify-center font-black text-xs ${pax.is_lead ? 'text-white shadow-md' : 'bg-slate-100 text-slate-400'}`} style={pax.is_lead ? { backgroundColor: APP_COLOR } : {}}>{pax.first_name?.[0] || '?'}{pax.last_name?.[0] || '?'}</div>
+                                       <div>
+                                         <div className="font-black text-slate-800 text-lg flex items-center gap-2">{pax.title || 'Mr'} {pax.first_name} {pax.last_name} {pax.is_lead && <span className="text-[8px] bg-slate-900 text-white px-2 py-0.5 rounded-full uppercase tracking-wider">Lead</span>}</div>
+                                         <div className="text-[10px] text-slate-400 font-black uppercase tracking-widest flex items-center gap-2">
+                                             <span>{pax.phone || 'No Phone'}</span> • <span>{pax.email || 'No Email'}</span>
+                                         </div>
+                                       </div>
+                                   </div>
+                               </td>
+                               <td className="px-6 py-5">
+                                   <div className="space-y-1">
+                                       <div className="flex items-center gap-2 text-slate-700 font-bold text-sm"><BedDouble size={14} className="text-purple-500"/> {pax.room_preference || 'Standard'}</div>
+                                       <div className="text-[9px] font-black text-slate-400 uppercase bg-slate-100 w-fit px-2 py-0.5 rounded-md">Partner: <span className="text-slate-800">{pax.requested_roommate || 'Unassigned'}</span></div>
+                                   </div>
+                               </td>
+                               <td className="px-6 py-5">
+                                   <div className="flex flex-col gap-2">
+                                       <div className={`flex items-center gap-2 px-2 py-1 rounded-lg w-fit text-[10px] font-black uppercase ${pax.dietary_needs && pax.dietary_needs !== 'None' ? 'bg-orange-100 text-orange-600' : 'bg-slate-50 text-slate-400'}`}><Utensils size={12}/> {pax.dietary_needs || 'Standard Diet'}</div>
+                                       <div className={`flex items-center gap-2 text-xs font-bold ${pax.medical_info ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}><HeartPulse size={14}/> {pax.medical_info || 'No Medical History'}</div>
+                                   </div>
+                               </td>
+                               
+                               <td className="px-6 py-5">
+                                   <div className="font-black text-slate-900 text-lg leading-none">{BASE_CURRENCY} {Number(pax.amount_paid || 0).toLocaleString()}</div>
+                                   
+                                   {needsVerification ? (
+                                       <button 
+                                           onClick={() => handleVerifyPayment(pax)}
+                                           className="mt-2 bg-amber-100 text-amber-700 hover:bg-amber-500 hover:text-white border border-amber-200 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-1 transition-colors"
+                                       >
+                                           <AlertCircle size={12}/> Verify Funds
+                                       </button>
+                                   ) : (
+                                       <div className={`text-[9px] font-black uppercase tracking-widest mt-1 ${pax.payment_status === 'Full' ? 'text-emerald-500' : 'text-blue-500'}`}>{pax.payment_status}</div>
+                                   )}
+                               </td>
 
-                            return (
-                            <tr key={pax.id} className={`group shadow-sm transition-all ${pax.is_lead ? 'bg-slate-50 ring-1 ring-slate-200' : 'bg-white border-y border-slate-50 hover:bg-slate-50'}`}>
-                                <td className="px-6 py-5 text-center rounded-l-[2rem]">
-                                    <button onClick={() => handleToggleBoarding(pax)} className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${pax.boarded ? 'text-white shadow-lg' : 'bg-slate-50 text-slate-200 border-2 border-dashed border-slate-200 hover:border-teal-200'}`} style={pax.boarded ? { backgroundColor: APP_COLOR } : {}}><CheckCircle size={22}/></button>
-                                </td>
-                                <td className="px-6 py-5">
-                                    <div className="flex items-center gap-4">
-                                        <div className={`w-12 h-12 rounded-full flex items-center justify-center font-black text-xs ${pax.is_lead ? 'text-white shadow-md' : 'bg-slate-100 text-slate-400'}`} style={pax.is_lead ? { backgroundColor: APP_COLOR } : {}}>{pax.first_name?.[0] || '?'}{pax.last_name?.[0] || '?'}</div>
-                                        <div>
-                                        <div className="font-black text-slate-800 text-lg flex items-center gap-2">{pax.title || 'Mr'} {pax.first_name} {pax.last_name} {pax.is_lead && <span className="text-[8px] bg-slate-900 text-white px-2 py-0.5 rounded-full uppercase tracking-wider">Lead</span>}</div>
-                                        <div className="text-[10px] text-slate-400 font-black uppercase tracking-widest flex items-center gap-2">
-                                            <span>{pax.phone || 'No Phone'}</span> • <span>{pax.email || 'No Email'}</span>
-                                        </div>
-                                        </div>
-                                    </div>
-                                </td>
-                                <td className="px-6 py-5">
-                                    <div className="space-y-1">
-                                        <div className="flex items-center gap-2 text-slate-700 font-bold text-sm"><BedDouble size={14} className="text-purple-500"/> {pax.room_preference || 'Standard'}</div>
-                                        <div className="text-[9px] font-black text-slate-400 uppercase bg-slate-100 w-fit px-2 py-0.5 rounded-md">Partner: <span className="text-slate-800">{pax.requested_roommate || 'Unassigned'}</span></div>
-                                    </div>
-                                </td>
-                                <td className="px-6 py-5">
-                                    <div className="flex flex-col gap-2">
-                                        <div className={`flex items-center gap-2 px-2 py-1 rounded-lg w-fit text-[10px] font-black uppercase ${pax.dietary_needs && pax.dietary_needs !== 'None' ? 'bg-orange-100 text-orange-600' : 'bg-slate-50 text-slate-400'}`}><Utensils size={12}/> {pax.dietary_needs || 'Standard Diet'}</div>
-                                        <div className={`flex items-center gap-2 text-xs font-bold ${pax.medical_info ? 'text-red-500 animate-pulse' : 'text-slate-300'}`}><HeartPulse size={14}/> {pax.medical_info || 'No Medical History'}</div>
-                                    </div>
-                                </td>
-                                
-                                {/* 🌟 THE ACCOUNTING & VERIFICATION COLUMN */}
-                                <td className="px-6 py-5">
-                                    <div className="font-black text-slate-900 text-lg leading-none">{BASE_CURRENCY} {Number(pax.amount_paid || 0).toLocaleString()}</div>
-                                    
-                                    {isPending ? (
-                                        <button 
-                                            onClick={async () => {
-                                                if(window.confirm(`Verify funds received for ${pax.first_name}? This secures their seat and unlocks their Passport.`)) {
-                                                    // Update UI Instantly
-                                                    const newStatus = pax.payment_status === 'Pending Full' ? 'Full' : 'Deposit';
-                                                    setManifestData(prev => prev.map(p => p.id === pax.id ? { ...p, payment_status: newStatus } : p));
-                                                    // Update Database
-                                                    await supabase.from('passengers').update({ payment_status: newStatus }).eq('id', pax.id);
-                                                }
-                                            }}
-                                            className="mt-2 bg-amber-100 text-amber-700 hover:bg-amber-500 hover:text-white border border-amber-200 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-1 transition-colors"
-                                        >
-                                            <AlertCircle size={12}/> Verify Funds
-                                        </button>
-                                    ) : (
-                                        <div className={`text-[9px] font-black uppercase tracking-widest mt-1 ${pax.payment_status === 'Full' ? 'text-emerald-500' : 'text-blue-500'}`}>{pax.payment_status}</div>
-                                    )}
-                                </td>
-
-                                {/* 🌟 THE SHARE PASSPORT & ACTIONS COLUMN */}
-                                <td className="px-6 py-5 text-center rounded-r-[2rem]">
-                                    <div className="flex justify-center gap-2">
-                                        <button 
-                                            onClick={() => {
-                                                const url = `${window.location.origin}/passport/${pax.booking_id}`;
-                                                navigator.clipboard.writeText(url);
-                                                alert(`Passport link copied for ${pax.first_name}!\n\n${url}`);
-                                            }} 
-                                            title="Copy Passenger Passport Link"
-                                            className="p-3 bg-slate-900 text-white rounded-xl shadow-sm hover:bg-slate-700 transition-all active:scale-95"
-                                        >
-                                            <LinkIcon size={16}/>
-                                        </button>
-                                        <button onClick={() => { setPaxForm(pax); setIsEditingPax(true); }} className="p-3 bg-white border border-slate-100 rounded-xl shadow-sm text-slate-400 hover:text-blue-600 hover:border-blue-200 transition-all active:scale-95"><Pencil size={16}/></button>
-                                        <button onClick={() => handleDeletePassenger(pax.id, `${pax.first_name} ${pax.last_name}`)} className="p-3 bg-white border border-slate-100 rounded-xl shadow-sm text-slate-400 hover:text-red-600 hover:border-red-200 transition-all active:scale-95"><Trash2 size={16}/></button>
-                                    </div>
-                                </td>
-                            </tr>
-                            );
-                        })}
-                        </tbody>
+                               <td className="px-6 py-5 text-center rounded-r-[2rem]">
+                                   <div className="flex justify-center gap-2">
+                                       <button 
+                                          onClick={() => setPreviewBookingId(String(pax.booking_id))} 
+                                          title="Preview Digital Passport"
+                                          className="p-3 bg-white border border-slate-100 rounded-xl shadow-sm text-slate-400 hover:text-emerald-600 hover:border-emerald-200 transition-all active:scale-95"
+                                       >
+                                           <Eye size={16}/>
+                                       </button>
+                                       <button 
+                                          onClick={() => {
+                                              const url = `${window.location.origin}/passport/${pax.booking_id}`;
+                                              navigator.clipboard.writeText(url);
+                                              alert(`Passport link copied for ${pax.first_name}!\n\n${url}`);
+                                          }} 
+                                          title="Copy Passenger Passport Link"
+                                          className="p-3 bg-slate-900 text-white rounded-xl shadow-sm hover:bg-slate-700 transition-all active:scale-95"
+                                       >
+                                           <LinkIcon size={16}/>
+                                       </button>
+                                       <button onClick={() => { setPaxForm(pax); setIsEditingPax(true); }} className="p-3 bg-white border border-slate-100 rounded-xl shadow-sm text-slate-400 hover:text-blue-600 hover:border-blue-200 transition-all active:scale-95"><Pencil size={16}/></button>
+                                       <button onClick={() => handleDeletePassenger(pax.id, `${pax.first_name} ${pax.last_name}`)} className="p-3 bg-white border border-slate-100 rounded-xl shadow-sm text-slate-400 hover:text-red-600 hover:border-red-200 transition-all active:scale-95"><Trash2 size={16}/></button>
+                                   </div>
+                               </td>
+                           </tr>
+                         );
+                       })}
+                    </tbody>
                  </table>
               </div>
            </div>
@@ -910,6 +1014,29 @@ const AdminOperations: React.FC<{ user: any }> = ({ user }) => {
                   <button onClick={handleSavePassenger} className="w-full text-white py-6 rounded-[2.5rem] font-black text-xl shadow-2xl hover:scale-[1.01] active:scale-95 transition-all flex items-center justify-center gap-4" style={{ backgroundColor: APP_COLOR }}>
                     <Save size={24}/> Sync Changes
                   </button>
+              </div>
+           </div>
+        </div>
+      )}
+
+      {/* 🌟 MODAL 4: PASSPORT PREVIEW (IFRAME) */}
+      {previewBookingId && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
+           <div className="bg-slate-900  w-[45vh] h-[85vh] rounded-[3rem] shadow-2xl flex flex-col overflow-hidden border-4 border-slate-1000 animate-in zoom-in-95 duration-200 relative">
+              <div className="flex justify-between items-center p-4 bg-slate-900 border-b border-slate-800 text-white">
+                  <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                      <h3 className="font-black text-[10px] uppercase tracking-widest text-slate-400">Live Client View</h3>
+                  </div>
+                  <button onClick={() => setPreviewBookingId(null)} className="p-2 bg-slate-800 hover:bg-red-500 hover:text-white rounded-full transition-all text-slate-400"><X size={14}/></button>
+              </div>
+              
+              <div className="flex-1 w-full relative bg-slate-50">
+                  <iframe 
+                      src={`${window.location.origin}/passport/${previewBookingId}`} 
+                      className="w-full h-full border-none"
+                      title="Passport Preview"
+                  />
               </div>
            </div>
         </div>
@@ -987,15 +1114,20 @@ const FieldOperations: React.FC<{ subscriberId: string }> = ({ subscriberId }) =
     );
 };
 
-const TourOperations: React.FC = () => {
+const TourOperationsWrapper: React.FC = () => {
   const { user } = useTenant();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (user?.role === 'Guide' || user?.role === 'Driver') {
+      navigate('/field-app');
+    }
+  }, [user, navigate]);
+
   if (!user) return null;
+  if (user.role === 'Guide' || user.role === 'Driver') return null;
   
-  // Routes to the mobile field version if it's a Driver or Guide
-  if (user.role === 'Guide' || user.role === 'Driver') return <FieldOperations subscriberId={user.subscriberId} />;
-  
-  // Otherwise routes to the full Operations Command Center
   return <AdminOperations user={user} />;
 };
 
-export default TourOperations;
+export default TourOperationsWrapper;

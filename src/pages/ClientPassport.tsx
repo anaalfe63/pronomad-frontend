@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
+import { useTenant } from '../contexts/TenantContext';
 import { QRCodeSVG } from 'qrcode.react';
 import { supabase } from '../lib/supabase';
 import { 
@@ -16,6 +17,8 @@ interface PassportData {
 }
 
 const ClientPassport: React.FC = () => {
+  const { user } = useTenant(); 
+  
   const { bookingId } = useParams<{ bookingId: string }>();
   const [data, setData] = useState<PassportData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -53,14 +56,17 @@ const ClientPassport: React.FC = () => {
                 .single();
             tripData = trip;
             
-            // Fetch the specific company branding for this ticket
+            // 🌟 THE FIX: Safely fetch the agency's settings without crashing
             if (trip?.subscriber_id) {
                 const { data: settings } = await supabase
                     .from('system_settings')
                     .select('company_name, company_logo, theme_color, currency')
                     .eq('subscriber_id', trip.subscriber_id)
-                    .single();
-                companyData = settings;
+                    .limit(1);
+                
+                if (settings && settings.length > 0) {
+                    companyData = settings[0];
+                }
             }
         }
 
@@ -268,8 +274,7 @@ const ClientPassport: React.FC = () => {
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] text-center">Scan at Departure Gate</p>
             <p className="text-[9px] font-bold text-slate-300 mt-1">REF: {data.bookingRef}</p>
           </div>
-
-        </div> {/* <-- This was the missing closing tag! */}
+        </div> 
 
         {/* ITINERARY TAB (If available) */}
         {data.trip.itinerary && data.trip.itinerary.length > 0 && (
@@ -294,7 +299,6 @@ const ClientPassport: React.FC = () => {
             </div>
           </div>
         )}
-
       </div>
     </div>
   );

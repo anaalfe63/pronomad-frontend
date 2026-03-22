@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useTenant } from '../contexts/TenantContext';
-import { supabase } from '../lib/supabase'; // 🌟 Added Supabase Import
+import { supabase } from '../lib/supabase'; 
 import { 
   Users, Map, ShieldCheck, ArrowUpRight, Lock, Rocket, 
-  X, CreditCard, Smartphone, Monitor, Tablet, Calendar, CheckCircle
+  X, CreditCard, Smartphone, Monitor, Tablet, Calendar, 
+  CheckCircle, AlertTriangle, Phone, MessageCircle, RefreshCw,
+  Zap, Shield, Sparkles, Headphones // Added Headphones here!
 } from 'lucide-react';
 
 // --- TYPES & INTERFACES ---
@@ -31,12 +33,27 @@ interface SelectedUpgrade extends Plan {
   finalPrice: number;
 }
 
-// Declare Paystack on window object
+// RESTORED: Missing Interfaces
+interface PricingCardProps {
+  plan: Plan;
+  currentPlanId: string;
+  billingCycle: 'monthly' | 'yearly';
+  isSystemLocked: boolean;
+  onSelect: () => void;
+}
+
+interface UpgradeModalProps {
+  upgrade: SelectedUpgrade;
+  userEmail: string;
+  isSystemLocked: boolean;
+  onClose: () => void;
+  onSuccess: (reference: string) => void;
+}
+
+// 🌟 FIX: Match the exact type used in PublicBooking.tsx to avoid TS conflict
 declare global {
   interface Window {
-    PaystackPop: {
-      setup: (options: any) => { openIframe: () => void };
-    };
+    PaystackPop: any;
   }
 }
 
@@ -45,65 +62,74 @@ declare global {
 // REPLACE WITH YOUR REAL PAYSTACK PUBLIC KEY
 const PAYSTACK_KEY = 'pk_live_2c3e4c090fc872a118042fb55f9932158dd89fa3'; 
 
-const PLAN_ORDER = ['Standard', 'Pro', 'Premium'];
+const PLAN_ORDER = ['Startup', 'Basic', 'Pro', 'Premium'];
 
 const PLAN_LIMITS: Record<string, number> = {
-  'Standard': 5,
+  'Startup': 3,
+  'Basic': 5,
   'Pro': 20,
   'Premium': 9999
 };
 
 const PLANS: Plan[] = [
   {
-    id: 'Standard',
+    id: 'Startup',
+    name: 'Startup',
+    monthlyPrice: 60,
+    description: 'Perfect for new agencies getting off the ground.',
+    color: 'from-amber-500 to-orange-600',
+    seats: 3,
+    features: ['5% Platform Commission', 'Paystack Split Payments', 'Standard Manifests', 'Community Support']
+  },
+  {
+    id: 'Basic',
     name: 'Basic',
     monthlyPrice: 299,
-    description: 'Essential tools for solo operators.',
-    color: 'from-slate-600 to-slate-800',
+    description: 'Essential management for growing operators.',
+    color: 'from-slate-700 to-slate-900',
     seats: 5,
-    features: ['5 Staff Accounts', 'Standard Manifests', 'Offline Mode', 'Email Support']
+    features: ['0% Platform Commission', 'Offline Operations', 'Advanced Manifests', 'Priority Email Support']
   },
   {
     id: 'Pro', 
     name: 'Pro',
     monthlyPrice: 599,
-    description: 'Automation for growing agencies.',
-    color: 'from-teal-600 to-teal-900',
+    description: 'Advanced automation for professional agencies.',
+    color: 'from-teal-500 to-emerald-700',
     isPopular: true,
     seats: 20,
-    features: ['20 Staff Accounts', 'Live Fleet GPS', 'Finance Ledger', 'Email Invoicing']
+    features: ['20 Staff Accounts', 'Live Fleet GPS', 'Finance Ledger', 'API Access']
   },
   {
     id: 'Premium', 
     name: 'Premium',
     monthlyPrice: 849,
-    description: 'Priority control & maximum scale.',
-    color: 'from-purple-600 to-purple-900',
+    description: 'The ultimate control center for enterprise scale.',
+    color: 'from-indigo-600 to-purple-800',
     seats: 'Unlimited',
-    features: ['Unlimited Staff', 'White-Label Domain', 'API Access', 'Dedicated Account Mgr']
+    features: ['Unlimited Staff', 'White-Label Domain', 'AI Analytics', 'Dedicated Manager']
   }
 ];
 
 const Subscription: React.FC = () => {
   const { user } = useTenant();
   
-  // 🌟 THE FIX: Safely extract variables to bypass TypeScript strictness
   const targetId = (user as any)?.uid || (user as any)?.subscriberId;
   const userEmail = (user as any)?.email; 
+  const isSystemLocked = user?.isExpired || false;
 
-  const [subData, setSubData] = useState<SubData>({ plan: 'Standard', status: 'Active', renewal_date: new Date(), created_at: new Date() });
+  const [subData, setSubData] = useState<SubData>({ plan: 'Startup', status: 'Active', renewal_date: new Date(), created_at: new Date() });
   const [staffCount, setStaffCount] = useState<number>(0);
   const [billingCycle, setBillingCycle] = useState<'monthly' | 'yearly'>('monthly'); 
   const [loading, setLoading] = useState<boolean>(true);
   const [selectedUpgrade, setSelectedUpgrade] = useState<SelectedUpgrade | null>(null); 
 
-  // --- 1. FETCH DATA (Now using Supabase!) ---
+  // --- 1. FETCH DATA ---
   const fetchData = async () => {
     if (!targetId) return;
     setLoading(true);
     
     try {
-      // Fetch Subscription Data
       const { data: subDataRes } = await supabase
         .from('subscribers')
         .select('plan, status, subscriptionExpiresAt, endDate, created_at')
@@ -111,15 +137,16 @@ const Subscription: React.FC = () => {
         .maybeSingle();
 
       if (subDataRes) {
+         const dbPlan = subDataRes.plan ? subDataRes.plan.charAt(0).toUpperCase() + subDataRes.plan.slice(1).toLowerCase() : 'Startup';
+         
          setSubData({
-             plan: subDataRes.plan || 'Standard',
+             plan: dbPlan,
              status: subDataRes.status || 'Active',
              renewal_date: subDataRes.subscriptionExpiresAt || subDataRes.endDate || new Date(),
              created_at: subDataRes.created_at || new Date()
          });
       }
 
-      // Fetch Staff Count
       const { count } = await supabase
         .from('staff')
         .select('*', { count: 'exact', head: true })
@@ -138,46 +165,43 @@ const Subscription: React.FC = () => {
     fetchData();
   }, [targetId]);
 
-  // --- 2. PAYMENT HANDLER (Now updates Supabase directly!) ---
+  // --- 2. PAYMENT HANDLER ---
   const handlePaymentSuccess = async (reference: string) => {
     if (!selectedUpgrade || !targetId) return;
     
     try {
-        // Calculate new expiry date
         const now = new Date();
         const daysToAdd = selectedUpgrade.cycle === 'yearly' ? 365 : 30;
         const newExpiry = new Date(now.setDate(now.getDate() + daysToAdd)).toISOString();
 
-        // Update the database
         const { error } = await supabase
             .from('subscribers')
             .update({ 
                 plan: selectedUpgrade.id,
                 subscriptionExpiresAt: newExpiry,
-                status: 'Active'
+                status: 'active'
             })
             .eq('id', targetId);
 
         if (error) throw error;
 
-        // Log the upgrade action
         await supabase.from('activity_logs').insert({
             user_id: targetId,
-            action: `Upgraded to ${selectedUpgrade.name} (${selectedUpgrade.cycle})`,
+            action: `${isSystemLocked ? 'Renewed' : 'Upgraded'} to ${selectedUpgrade.name} (${selectedUpgrade.cycle})`,
             device_info: 'Paystack Checkout',
             location: 'System Log'
         });
 
         setSelectedUpgrade(null);
-        alert("Upgrade Successful! Welcome to your new tier.");
-        fetchData(); // Refresh the UI with new plan info
+        alert(`${isSystemLocked ? 'Renewal' : 'Upgrade'} Successful! Your system is now active.`);
+        window.location.reload(); 
     } catch (e) { 
         console.error(e);
         alert("Payment succeeded, but we had trouble updating your account. Please contact support."); 
     }
   };
 
-  // --- 3. INITIATE UPGRADE ---
+  // --- 3. INITIATE UPGRADE/RENEWAL ---
   const initiateUpgrade = (plan: Plan) => {
     const price = billingCycle === 'monthly' ? plan.monthlyPrice : plan.monthlyPrice * 10;
     setSelectedUpgrade({
@@ -187,234 +211,224 @@ const Subscription: React.FC = () => {
     });
   };
 
-  // --- Helpers ---
   const formatDate = (dateString: string | Date) => {
     if (!dateString) return 'Active';
     return new Date(dateString).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
   };
 
-  const limit = PLAN_LIMITS[subData.plan] || 5;
-  const remaining = limit - staffCount;
+  const limit = PLAN_LIMITS[subData.plan] || 3;
   const progress = Math.min((staffCount / limit) * 100, 100);
   const isUnlimited = limit > 1000;
 
   return (
-    <div className="animate-fade-in pb-20 max-w-7xl mx-auto">
+    <div className="min-h-screen bg-slate-50 relative overflow-hidden font-sans pb-20">
       
-      {/* HEADER PROFILE */}
-      <div className="mb-16 relative group">
-        <div className="absolute inset-0 bg-gradient-to-r from-slate-200 to-slate-300 rounded-[2.5rem] rotate-1 shadow-xl"></div>
-        <div className="bg-white rounded-[2.5rem] shadow-2xl border border-slate-100 overflow-hidden relative z-10 p-8 md:p-10 flex flex-col md:flex-row gap-10">
-            <div className="flex-1 flex gap-6 items-start border-r border-slate-100 pr-8">
-                <div className="w-24 h-24 rounded-3xl bg-slate-900 text-white flex items-center justify-center text-4xl shadow-xl border-4 border-white transform rotate-3">
-                    <ShieldCheck size={40} strokeWidth={1.5} />
-                </div>
-                <div className="flex-1">
-                    <div className="flex items-center justify-between mb-1">
-                        <h2 className="text-3xl font-black text-slate-900 tracking-tight">{user?.fullName || 'My Agency'}</h2>
-                        <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${subData.status === 'Active' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                            {subData.status}
-                        </span>
-                    </div>
-                    <p className="text-slate-400 font-medium text-sm flex items-center gap-2 mb-6">
-                        <Map size={14}/> ID: <span className="font-mono text-slate-600 bg-slate-100 px-2 rounded">{targetId}</span>
-                    </p>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">Current Tier</p>
-                            <p className="text-sm font-black text-slate-800">
-                                {PLANS.find(p => p.id === subData.plan)?.name || subData.plan}
-                            </p>
-                        </div>
-                        <div>
-                            <p className="text-[10px] text-slate-400 uppercase font-bold mb-1">Renewal Date</p>
-                            <p className="text-sm font-black text-teal-600 flex items-center gap-2">
-                                <Calendar size={14}/> {formatDate(subData.renewal_date)}
-                            </p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div className="flex-1 flex flex-col justify-center pl-4">
-                <div className="flex justify-between items-end mb-3">
-                    <h3 className="text-sm font-black text-slate-700 uppercase flex items-center gap-2">
-                        <Users size={16} className="text-teal-500"/> Seat Capacity
-                    </h3>
-                    <p className="text-3xl font-black text-slate-800">
-                        {staffCount} <span className="text-lg text-slate-400 font-medium">/ {isUnlimited ? '∞' : limit}</span>
-                    </p>
-                </div>
-                <div className="h-4 bg-slate-100 rounded-full overflow-hidden border border-slate-200 mb-2">
-                    <div className={`h-full transition-all duration-1000 ${progress > 90 ? 'bg-red-500' : 'bg-teal-500'}`} style={{ width: `${isUnlimited ? 5 : progress}%` }}></div>
-                </div>
-                <div className="flex justify-between items-center text-xs">
-                    <span className="text-slate-400 font-medium">Member Since: {new Date(subData.created_at).getFullYear()}</span>
-                    <span className="font-bold text-slate-600">{remaining} seats available</span>
-                </div>
-            </div>
-        </div>
+      {/* 🌫️ TEXTURED BACKGROUND ELEMENTS */}
+      <div className="absolute inset-0 pointer-events-none opacity-40" 
+           style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")` }}>
       </div>
+      <div className="absolute top-[-10%] right-[-10%] w-[500px] h-[500px] bg-teal-200/30 blur-[120px] rounded-full pointer-events-none"></div>
+      <div className="absolute bottom-[-10%] left-[-10%] w-[500px] h-[500px] bg-purple-200/30 blur-[120px] rounded-full pointer-events-none"></div>
 
-      {/* PRICING TOGGLE */}
-      <div className="text-center mb-10">
-        <h2 className="text-4xl font-black text-slate-900 mb-4">Choose your Flight Path</h2>
-        <div className="flex items-center justify-center gap-4 mb-8">
-            <span className={`text-sm font-bold ${billingCycle === 'monthly' ? 'text-slate-900' : 'text-slate-400'}`}>Monthly</span>
+      <div className="relative z-10 max-w-7xl mx-auto px-6 pt-12">
+        
+        {/* 🔴 EXPIRED SYSTEM LOCK BANNER */}
+        {isSystemLocked && (
+          <div className="mb-12 bg-red-950 rounded-[2.5rem] p-1 shadow-2xl relative overflow-hidden animate-in slide-in-from-top-10">
+             <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1557682250-33bd709cbe85?auto=format&fit=crop&w=1200&q=80')] bg-cover opacity-10 mix-blend-overlay"></div>
+             <div className="bg-red-950/80 backdrop-blur-xl rounded-[2.4rem] border border-red-500/30 p-8 md:p-12 text-center relative z-10">
+                 <div className="w-20 h-20 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6 border-2 border-red-500/50 shadow-[0_0_40px_rgba(239,68,68,0.4)]">
+                     <Lock size={40} />
+                 </div>
+                 <h2 className="text-3xl md:text-5xl font-black text-white mb-4 tracking-tight">System Locked</h2>
+                 <p className="text-red-200 text-lg max-w-2xl mx-auto mb-8 font-medium">
+                     Your Pronomad operating license expired on <strong>{formatDate(subData.renewal_date)}</strong>. 
+                     Core operations have been suspended. Please renew your subscription below.
+                 </p>
+             </div>
+          </div>
+        )}
+
+        {/* HEADER PROFILE (Hidden if locked) */}
+        {!isSystemLocked && (
+          <div className="mb-12 bg-white/70 backdrop-blur-xl rounded-[2.5rem] p-8 border border-white shadow-2xl shadow-slate-200/50 flex flex-col lg:flex-row gap-8 items-center">
+            <div className="flex-1 flex gap-6 items-center">
+              <div className="w-20 h-20 bg-slate-900 rounded-3xl flex items-center justify-center text-white shadow-2xl">
+                <Shield size={36} className="text-teal-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-3">
+                  <h2 className="text-2xl font-black text-slate-900">{user?.fullName || 'My Agency'}</h2>
+                  <span className={`px-3 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest ${subData.status.toLowerCase() === 'active' ? 'bg-emerald-100 text-emerald-600' : 'bg-rose-100 text-rose-600'}`}>
+                    {subData.status}
+                  </span>
+                </div>
+                <p className="text-slate-400 font-bold text-xs mt-1 uppercase tracking-tight flex items-center gap-2">
+                  <Zap size={12} className="text-amber-500 fill-amber-500" /> Current Plan: <span className="text-slate-700">{subData.plan}</span>
+                </p>
+              </div>
+            </div>
+
+            <div className="w-px h-12 bg-slate-200 hidden lg:block"></div>
+
+            <div className="flex-1 w-full">
+              <div className="flex justify-between items-end mb-2">
+                <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Seat Utilization</span>
+                <span className="text-sm font-black text-slate-800">{staffCount} / {isUnlimited ? '∞' : limit}</span>
+              </div>
+              <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
+                <div className="h-full bg-slate-900 transition-all duration-1000" style={{ width: `${isUnlimited ? 5 : progress}%` }}></div>
+              </div>
+            </div>
+
+            <div className="w-px h-12 bg-slate-200 hidden lg:block"></div>
+
+            <div className="flex-1 w-full">
+              <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest block mb-1">Renewal Date</span>
+              <div className="flex items-center gap-2 text-slate-900 font-black">
+                <Calendar size={18} className="text-teal-500" />
+                {formatDate(subData.renewal_date)}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* PRICING TOGGLE */}
+        <div className="text-center mb-16">
+          <h1 className="text-5xl md:text-6xl font-black text-slate-900 tracking-tighter mb-4">
+            {isSystemLocked ? 'Select Renewal Plan.' : <>Scale your <span className="text-transparent bg-clip-text bg-gradient-to-r from-teal-600 to-indigo-600">Operations.</span></>}
+          </h1>
+          <p className="text-slate-500 font-medium text-lg max-w-2xl mx-auto mb-10">
+            Choose the workspace capacity that fits your current fleet size. Save 17% on annual commitments.
+          </p>
+
+          <div className="inline-flex items-center bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm">
             <button 
-                onClick={() => setBillingCycle(prev => prev === 'monthly' ? 'yearly' : 'monthly')}
-                className="w-16 h-8 bg-slate-200 rounded-full relative transition-colors duration-300 focus:outline-none"
+              onClick={() => setBillingCycle('monthly')}
+              className={`px-6 py-2 rounded-xl text-sm font-black transition-all ${billingCycle === 'monthly' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
             >
-                <div className={`w-6 h-6 bg-teal-500 rounded-full absolute top-1 transition-all duration-300 shadow-sm ${billingCycle === 'monthly' ? 'left-1' : 'left-9'}`}></div>
+              Monthly
             </button>
-            <span className={`text-sm font-bold ${billingCycle === 'yearly' ? 'text-slate-900' : 'text-slate-400'}`}>
-                Annually <span className="text-green-600 text-[10px] bg-green-100 px-2 py-0.5 rounded-full ml-1">SAVE 17%</span>
-            </span>
+            <button 
+              onClick={() => setBillingCycle('yearly')}
+              className={`px-6 py-2 rounded-xl text-sm font-black transition-all flex items-center gap-2 ${billingCycle === 'yearly' ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-400 hover:text-slate-600'}`}
+            >
+              Yearly <span className="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-md">Save 17%</span>
+            </button>
+          </div>
         </div>
+
+        {/* PRICING CARDS */}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-8 mb-20">
+          {PLANS.map((plan) => (
+            <PricingCard 
+              key={plan.id} 
+              plan={plan} 
+              currentPlanId={subData.plan} 
+              billingCycle={billingCycle}
+              isSystemLocked={isSystemLocked}
+              onSelect={() => initiateUpgrade(plan)}
+            />
+          ))}
+        </div>
+
+        {/* CUSTOMER SUPPORT BAR */}
+        <div className="p-8 bg-slate-900 rounded-[3rem] text-white flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl relative overflow-hidden">
+          <div className="absolute right-0 top-0 w-64 h-64 bg-teal-500/10 blur-3xl"></div>
+          <div className="flex items-center gap-6 relative z-10">
+            <div className="w-14 h-14 bg-white/10 rounded-2xl flex items-center justify-center">
+              <Headphones size={28} className="text-teal-400" />
+            </div>
+            <div>
+              <h4 className="text-xl font-black">Need a custom plan?</h4>
+              <p className="text-slate-400 text-sm font-medium">Contact Ato Williams for enterprise-level fleet solutions.</p>
+            </div>
+          </div>
+          <div className="flex gap-4 relative z-10 w-full md:w-auto">
+            <a href="tel:+233248518528" className="flex-1 md:flex-none bg-white/10 hover:bg-white/20 text-white font-black py-4 px-8 rounded-2xl transition-all flex items-center justify-center gap-2">
+              <Phone size={18} /> Call
+            </a>
+            <a href="https://wa.me/233248518528" target="_blank" rel="noreferrer" className="flex-1 md:flex-none bg-emerald-500 hover:bg-emerald-400 text-white font-black py-4 px-8 rounded-2xl transition-all flex items-center justify-center gap-2 shadow-xl shadow-emerald-500/20">
+              <MessageCircle size={18} /> WhatsApp
+            </a>
+          </div>
+        </div>
+
       </div>
 
-      {/* PRICING CARDS */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-end mb-24">
-        {PLANS.map((plan) => (
-          <PricingCard 
-            key={plan.id} 
-            plan={plan} 
-            currentPlanId={subData.plan} 
-            billingCycle={billingCycle}
-            onSelect={() => initiateUpgrade(plan)}
-          />
-        ))}
-      </div>
-
-      {/* ENTERPRISE NOTE */}
-      {subData.plan === 'Premium' && (
-         <div className="max-w-4xl mx-auto bg-slate-900 rounded-[2rem] p-1 shadow-2xl mb-24 animate-in slide-in-from-bottom-10">
-            <div className="bg-slate-900 rounded-[1.9rem] border border-slate-700 p-12 text-center relative overflow-hidden">
-                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-64 h-64 bg-blue-500/20 blur-[80px] rounded-full"></div>
-                <div className="relative z-10 flex flex-col items-center">
-                    <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-purple-500/30">
-                        <Rocket size={32} className="text-white" />
-                    </div>
-                    <h2 className="text-3xl font-black text-white mb-4">Enterprise Tier is Next</h2>
-                    <p className="text-lg text-slate-400 max-w-lg mx-auto mb-8">
-                        You are currently on our highest available plan (Premium). We are actively developing the <strong>Enterprise / God-Mode</strong> tier which will include dedicated infrastructure and AI analytics.
-                    </p>
-                    <div className="inline-flex items-center gap-2 px-6 py-3 rounded-full bg-white/5 border border-white/10 text-blue-300 text-sm font-bold uppercase tracking-widest">
-                        <Lock size={14} /> In Development
-                    </div>
-                </div>
-            </div>
-         </div>
-      )}
-
-      {/* DEVICE VISUALS */}
-      <div className="mb-20">
-        <div className="text-center mb-12">
-            <h2 className="text-3xl font-black text-slate-900 mb-4">Operations on Every Screen</h2>
-            <p className="text-slate-500">From the back office to the bus terminal, your data stays synced.</p>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 h-[400px]">
-            <div className="md:col-span-2 relative rounded-[2.5rem] overflow-hidden shadow-2xl group">
-                <img src="https://images.unsplash.com/photo-1551288049-bebda4e38f71?auto=format&fit=crop&w=1200&q=80" alt="Dashboard" className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"/>
-                <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/40 to-transparent"></div>
-                <div className="absolute bottom-0 left-0 p-8 text-white">
-                    <Monitor size={32} className="mb-3 text-teal-400"/>
-                    <h3 className="text-xl font-bold mb-1">Central Command</h3>
-                    <p className="text-slate-300 text-sm">Manage bookings and finance from headquarters.</p>
-                </div>
-            </div>
-            <div className="relative rounded-[2.5rem] overflow-hidden shadow-xl group bg-slate-100">
-                <img src="https://images.unsplash.com/photo-1556742049-0cfed4f7a07d?auto=format&fit=crop&w=800&q=80" alt="Mobile" className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"/>
-                <div className="absolute inset-0 bg-slate-900/60 transition-opacity"></div>
-                <div className="absolute bottom-0 left-0 p-8 text-white">
-                    <div className="flex gap-2 mb-3">
-                        <Smartphone size={24} className="text-purple-400"/>
-                        <Tablet size={24} className="text-purple-400"/>
-                    </div>
-                    <h3 className="text-xl font-bold mb-1">Field Operations</h3>
-                    <p className="text-slate-300 text-sm">Drivers check-in via tablet app.</p>
-                </div>
-            </div>
-        </div>
-      </div>
-
-      {/* 🌟 THE MODAL FIX: Using the extracted userEmail variable */}
+      {/* CHECKOUT MODAL */}
       {selectedUpgrade && userEmail && (
         <UpgradeModal 
-            upgrade={selectedUpgrade} 
-            userEmail={userEmail} 
-            onClose={() => setSelectedUpgrade(null)}
-            onSuccess={handlePaymentSuccess}
+          upgrade={selectedUpgrade} 
+          userEmail={userEmail}
+          isSystemLocked={isSystemLocked}
+          onClose={() => setSelectedUpgrade(null)}
+          onSuccess={handlePaymentSuccess}
         />
       )}
-
     </div>
   );
 };
 
 // --- LOGIC-DRIVEN PRICING CARD ---
-interface PricingCardProps {
-  plan: Plan;
-  currentPlanId: string;
-  billingCycle: 'monthly' | 'yearly';
-  onSelect: () => void;
-}
-
-const PricingCard: React.FC<PricingCardProps> = ({ plan, currentPlanId, billingCycle, onSelect }) => {
+const PricingCard: React.FC<PricingCardProps> = ({ plan, currentPlanId, billingCycle, isSystemLocked, onSelect }) => {
   const currentIndex = PLAN_ORDER.indexOf(currentPlanId);
   const planIndex = PLAN_ORDER.indexOf(plan.id);
 
-  const isCurrent = planIndex === currentIndex;
-  const isLower = planIndex < currentIndex;
+  const isCurrent = !isSystemLocked && (planIndex === currentIndex);
+  const isLower = !isSystemLocked && (planIndex < currentIndex);
   
   const price = billingCycle === 'monthly' ? plan.monthlyPrice : plan.monthlyPrice * 10;
-  const period = billingCycle === 'monthly' ? '/mo' : '/yr';
 
   return (
-    <div className={`relative p-6 rounded-[2rem] transition-all duration-300 flex flex-col h-full 
-        ${isCurrent ? 'bg-teal-50 border-2 border-teal-500 scale-105 z-10' : 'bg-white border border-slate-100 hover:shadow-xl'}
-        ${isLower ? 'opacity-60 grayscale-[80%]' : ''} 
-    `}>
-      <div className={`h-32 rounded-[1.5rem] bg-gradient-to-br ${plan.color} p-6 text-white mb-6 flex flex-col justify-between shadow-lg`}>
-          <h3 className="text-lg font-black uppercase tracking-widest">{plan.name}</h3>
-          <div className="flex items-baseline gap-1">
-              <span className="text-xs opacity-70">GHS</span>
-              <span className="text-3xl font-black">{price.toLocaleString()}</span>
-              <span className="text-xs opacity-70">{period}</span>
-          </div>
-      </div>
-      <ul className="space-y-3 mb-8 px-2 flex-1">
-          {plan.features.map((feat, i) => (
-              <li key={i} className="flex items-center gap-3 text-sm text-slate-600 font-medium">
-                  <CheckCircle size={16} className={`${isLower ? 'text-slate-400' : 'text-teal-500'} shrink-0`}/> {feat}
-              </li>
-          ))}
-      </ul>
-      {isCurrent ? (
-          <button disabled className="w-full py-3 rounded-xl font-bold text-sm bg-transparent text-teal-600 border border-teal-200 cursor-default flex items-center justify-center gap-2">
-             <CheckCircle size={16}/> Current Plan
-          </button>
-      ) : isLower ? (
-          <button disabled className="w-full py-3 rounded-xl font-bold text-sm bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200">
-             Included
-          </button>
-      ) : (
-          <button onClick={onSelect} className="w-full py-3 rounded-xl font-bold text-sm bg-slate-900 text-white hover:bg-slate-800 transition-all shadow-lg flex items-center justify-center gap-2">
-            <ArrowUpRight size={16}/> Upgrade
-          </button>
+    <div className={`group relative bg-white/70 backdrop-blur-md rounded-[2.5rem] p-8 transition-all duration-500 flex flex-col border ${isCurrent ? 'ring-4 ring-teal-500/20 border-teal-500 shadow-2xl scale-105 bg-white' : 'border-slate-100 hover:border-slate-300 hover:shadow-xl'} ${isLower ? 'opacity-60 grayscale-[50%]' : ''}`}>
+      {plan.isPopular && (
+        <div className="absolute top-5 right-5 bg-teal-500 text-white text-[9px] font-black uppercase tracking-widest px-3 py-1 rounded-full shadow-lg">
+          Best Value
+        </div>
       )}
+      
+      <div className={`w-14 h-14 rounded-2xl bg-gradient-to-br ${plan.color} mb-6 flex items-center justify-center text-white shadow-lg`}>
+        {plan.id === 'Premium' ? <Sparkles size={24} /> : plan.id === 'Pro' ? <Rocket size={24} /> : <Zap size={24} />}
+      </div>
+
+      <h3 className="text-xl font-black text-slate-900 mb-1">{plan.name}</h3>
+      <p className="text-slate-400 text-xs font-bold mb-6 h-8 leading-tight">{plan.description}</p>
+
+      <div className="mb-8">
+        <div className="flex items-baseline gap-1">
+          <span className="text-slate-400 text-sm font-bold">GHS</span>
+          <span className="text-4xl font-black text-slate-900">{price.toLocaleString()}</span>
+          <span className="text-slate-400 text-xs font-bold">/{billingCycle === 'monthly' ? 'mo' : 'yr'}</span>
+        </div>
+        {plan.id === 'Startup' && <p className="text-orange-600 text-[10px] font-black mt-1 uppercase tracking-tighter">+ 5% per trip fee</p>}
+      </div>
+
+      <ul className="space-y-4 mb-10 flex-1">
+        {/* FIX: Added strict typing to feat and i */}
+        {plan.features.map((feat: string, i: number) => (
+          <li key={i} className="flex items-center gap-3 text-sm font-bold text-slate-600">
+            <div className="w-5 h-5 rounded-full bg-slate-100 flex items-center justify-center shrink-0">
+              <CheckCircle size={12} className="text-teal-600" />
+            </div>
+            {feat}
+          </li>
+        ))}
+      </ul>
+
+      <button 
+        disabled={isCurrent || isLower}
+        onClick={onSelect}
+        className={`w-full py-4 rounded-2xl font-black text-sm transition-all active:scale-95 flex items-center justify-center gap-2 ${isCurrent ? 'bg-teal-50 text-teal-600 cursor-default' : isLower ? 'bg-slate-50 text-slate-400 cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-slate-800 shadow-xl shadow-slate-900/10'}`}
+      >
+        {isCurrent ? <><CheckCircle size={16}/> Current</> : isLower ? 'Included' : isSystemLocked && plan.id === currentPlanId ? <><RefreshCw size={16}/> Renew Plan</> : <><ArrowUpRight size={16}/> {isSystemLocked ? 'Renew & Upgrade' : 'Upgrade'}</>}
+      </button>
     </div>
   );
 };
 
-// --- CHECKOUT MODAL (Manual Paystack Implementation) ---
-interface UpgradeModalProps {
-  upgrade: SelectedUpgrade;
-  userEmail: string;
-  onClose: () => void;
-  onSuccess: (reference: string) => void;
-}
-
-const UpgradeModal: React.FC<UpgradeModalProps> = ({ upgrade, userEmail, onClose, onSuccess }) => {
+// --- CHECKOUT MODAL ---
+const UpgradeModal: React.FC<UpgradeModalProps> = ({ upgrade, userEmail, isSystemLocked, onClose, onSuccess }) => {
     
     useEffect(() => {
         if (window.PaystackPop) return;
@@ -440,7 +454,7 @@ const UpgradeModal: React.FC<UpgradeModalProps> = ({ upgrade, userEmail, onClose
         const handler = window.PaystackPop.setup({
             key: PAYSTACK_KEY, 
             email: userEmail,
-            amount: upgrade.finalPrice * 100, // Kobo
+            amount: upgrade.finalPrice * 100, 
             currency: 'GHS',
             ref: (new Date()).getTime().toString(), 
             callback: function(response: any) {
@@ -454,48 +468,46 @@ const UpgradeModal: React.FC<UpgradeModalProps> = ({ upgrade, userEmail, onClose
     };
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={onClose}></div>
-            <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl z-10 overflow-hidden animate-in zoom-in-95 duration-200">
-                <div className="bg-slate-50 border-b border-slate-100 p-6 flex justify-between items-center">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+            <div className="absolute inset-0" onClick={onClose}></div>
+            <div className="bg-white w-full max-w-md rounded-[3rem] shadow-2xl overflow-hidden animate-in zoom-in-95 border border-white relative z-10">
+                <div className="p-8 border-b border-slate-50 flex justify-between items-center">
                     <div>
-                        <h3 className="text-lg font-black text-slate-900">Confirm Upgrade</h3>
-                        <p className="text-xs text-slate-500 flex items-center gap-1">
-                            <ShieldCheck size={12} className="text-green-500"/> Secured by Paystack
-                        </p>
+                        <h3 className="text-xl font-black text-slate-900">Secure Checkout</h3>
+                        <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest flex items-center gap-1 mt-1"><Shield size={10}/> SSL Encrypted</p>
                     </div>
-                    <button onClick={onClose} className="p-2 bg-white rounded-full text-slate-400 hover:text-red-500 border border-slate-200"><X size={18} /></button>
+                    <button onClick={onClose} className="p-2 hover:bg-slate-100 rounded-full transition-colors"><X size={20}/></button>
                 </div>
-                <div className="p-8 space-y-6">
-                    <div className={`bg-gradient-to-r ${upgrade.color} rounded-2xl p-6 text-white text-center shadow-lg relative overflow-hidden`}>
-                        <div className="relative z-10">
-                            <p className="text-xs font-bold text-white/60 uppercase tracking-widest mb-1">New Plan</p>
-                            <h2 className="text-3xl font-black">{upgrade.name}</h2>
-                            <span className="inline-block mt-2 px-3 py-1 bg-white/20 rounded-lg text-xs font-bold capitalize">
-                                {upgrade.cycle} Billing
-                            </span>
-                        </div>
+                <div className="p-10 space-y-8">
+                    <div className={`bg-gradient-to-br ${upgrade.color} p-8 rounded-[2rem] text-white shadow-xl relative overflow-hidden`}>
+                      <div className="absolute right-[-10%] bottom-[-10%] opacity-20"><Rocket size={100} /></div>
+                      <span className="text-[10px] font-black uppercase opacity-60 tracking-widest">Selected Tier</span>
+                      <h2 className="text-3xl font-black">{upgrade.name}</h2>
+                      <p className="text-xs font-bold opacity-80 mt-2 capitalize">{upgrade.cycle} Billing Cycle</p>
                     </div>
+                    
                     <div className="space-y-4">
-                        <div className="flex justify-between text-sm font-medium text-slate-600 border-b border-slate-100 pb-2">
-                            <span>Subscription Cost</span>
-                            <span>GHS {upgrade.finalPrice.toLocaleString()}</span>
+                        <div className="flex justify-between text-sm font-bold text-slate-500 uppercase tracking-tight">
+                            <span>Amount Due</span>
+                            <span className="text-slate-900">GHS {upgrade.finalPrice.toLocaleString()}</span>
                         </div>
-                        <div className="flex justify-between text-sm font-medium text-slate-600 border-b border-slate-100 pb-2">
-                            <span>Unused Days</span>
-                            <span className="text-green-600">+ Rollover Applied</span>
-                        </div>
-                        <div className="flex justify-between items-center pt-2">
-                            <span className="font-black text-slate-900">Total Due Today</span>
-                            <span className="font-black text-2xl text-slate-900">GHS {upgrade.finalPrice.toLocaleString()}</span>
+                        {!isSystemLocked && (
+                            <div className="flex justify-between text-sm font-bold text-slate-500 uppercase tracking-tight">
+                                <span>Unused Days</span>
+                                <span className="text-emerald-500">+ Rollover Applied</span>
+                            </div>
+                        )}
+                        <div className="h-px bg-slate-100 w-full"></div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-lg font-black text-slate-900 tracking-tighter">Total Payment</span>
+                            <span className="text-3xl font-black text-slate-900 tracking-tighter">GHS {upgrade.finalPrice.toLocaleString()}</span>
                         </div>
                     </div>
-                    <button onClick={payWithPaystack} className="w-full py-4 rounded-xl font-bold text-white bg-slate-900 hover:bg-slate-800 transition-all shadow-xl flex items-center justify-center gap-2 group">
-                        <CreditCard size={18} className="group-hover:scale-110 transition-transform"/> Pay to Upgrade
+
+                    <button onClick={payWithPaystack} className="w-full py-5 rounded-2xl bg-slate-900 text-white font-black text-lg shadow-2xl hover:bg-slate-800 transition-all active:scale-[0.98] flex items-center justify-center gap-2">
+                      <CreditCard size={20}/> Complete Payment
                     </button>
-                    <p className="text-[10px] text-center text-slate-400 px-4">
-                        Clicking pay will open the secure Paystack checkout window.
-                    </p>
+                    <p className="text-[10px] text-center text-slate-400 font-bold uppercase tracking-widest">Payment powered by Paystack</p>
                 </div>
             </div>
         </div>

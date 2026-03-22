@@ -2,6 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 // 🟢 Swapped Auth Engine
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
+// 🌟 1. IMPORT THE AUDIT LOGGER
+import { logAudit } from '../lib/auditLogger';
 import { 
   CheckCircle, Clock, Play, Wallet, TrendingUp, FileText, 
   Edit3, X, RefreshCw, Plus, Trash2, Receipt, Send,
@@ -181,6 +183,16 @@ const Payroll: React.FC = () => {
           const { error } = await supabase.from('payroll').insert(toInsert);
           if (error) throw error;
           fetchPayroll();
+          
+          // 🚨 2. AUDIT LOG: PAYROLL GENERATED
+          await logAudit(
+              user.subscriberId,
+              user.fullName || user.username || 'System',
+              user.role,
+              'Generated Monthly Payroll',
+              `Drafted ${toInsert.length} new payslips for the ${payrollRun} payroll cycle.`
+          );
+
           alert(`${toInsert.length} payslips drafted!`);
       } else {
           setPendingSyncs(prev => [...prev, {
@@ -227,7 +239,7 @@ const Payroll: React.FC = () => {
   };
 
   const savePayslip = async () => {
-      if (!selectedStaff) return;
+      if (!selectedStaff || !user?.subscriberId) return;
       
       const newBonus = activeAdjustments.filter(a => a.type === 'Earning').reduce((sum, a) => sum + Number(a.amount), 0);
       const newDeductions = activeAdjustments.filter(a => a.type === 'Deduction').reduce((sum, a) => sum + Number(a.amount), 0);
@@ -248,6 +260,16 @@ const Payroll: React.FC = () => {
           if (!navigator.onLine) throw new Error("Offline");
           const { error } = await supabase.from('payroll').update(payload).eq('id', selectedStaff.id);
           if (error) throw error;
+          
+          // 🚨 3. AUDIT LOG: PAYSLIP EDITED
+          await logAudit(
+              user.subscriberId,
+              user.fullName || user.username || 'System',
+              user.role,
+              'Updated Payslip',
+              `Adjusted payslip for ${selectedStaff.staff_name}. Net Pay set to: ₵${newNetPay.toLocaleString()}`
+          );
+
       } catch (e) { 
           setPendingSyncs(prev => [...prev, {
               id: Date.now(), table: 'payroll', action: 'UPDATE', recordId: selectedStaff.id, payload: payload
@@ -258,6 +280,9 @@ const Payroll: React.FC = () => {
   const updateStatus = async (id: string | number, newStatus: string) => {
     if (!window.confirm(`Mark this salary as ${newStatus}?`)) return;
     
+    // Find staff name for audit log
+    const staffMember = staffPayroll.find(s => s.id === id);
+
     // Optimistic UI
     setStaffPayroll(staffPayroll.map(staff => staff.id === id ? { ...staff, status: newStatus } : staff));
     
@@ -265,6 +290,18 @@ const Payroll: React.FC = () => {
         if (!navigator.onLine) throw new Error("Offline");
         const { error } = await supabase.from('payroll').update({ status: newStatus }).eq('id', id);
         if (error) throw error;
+        
+        // 🚨 4. AUDIT LOG: INDIVIDUAL DISBURSEMENT
+        if (user?.subscriberId && staffMember) {
+            await logAudit(
+                user.subscriberId,
+                user.fullName || user.username || 'System',
+                user.role,
+                'Disbursed Salary',
+                `Marked salary as ${newStatus} for ${staffMember.staff_name} (₵${Number(staffMember.net_pay).toLocaleString()}).`
+            );
+        }
+
     } catch(e) { 
         setPendingSyncs(prev => [...prev, {
             id: Date.now(), table: 'payroll', action: 'UPDATE', recordId: id, payload: { status: newStatus }
@@ -277,6 +314,9 @@ const Payroll: React.FC = () => {
       if (pendingStaff.length === 0) return alert("All staff are already marked as Paid for this month.");
       if (!window.confirm(`Are you sure you want to mark ${pendingStaff.length} pending payslips as PAID?`)) return;
       
+      // Calculate total disbursed for audit log
+      const totalDisbursed = pendingStaff.reduce((sum, s) => sum + Number(s.net_pay), 0);
+
       // Optimistic UI
       setStaffPayroll(staffPayroll.map(s => s.status !== 'Paid' ? { ...s, status: 'Paid' } : s));
 
@@ -289,6 +329,17 @@ const Payroll: React.FC = () => {
                   id: Date.now() + Math.random(), table: 'payroll', action: 'UPDATE', recordId: staff.id, payload: { status: 'Paid' }
               }]);
           }
+      }
+
+      // 🚨 5. AUDIT LOG: BULK DISBURSEMENT
+      if (user?.subscriberId) {
+          await logAudit(
+              user.subscriberId,
+              user.fullName || user.username || 'System',
+              user.role,
+              'Bulk Disbursed Payroll',
+              `Marked ${pendingStaff.length} payslips as PAID for ${payrollRun}. Total value: ₵${totalDisbursed.toLocaleString()}.`
+          );
       }
   };
 
@@ -325,7 +376,7 @@ const Payroll: React.FC = () => {
             )}
           </div>
           <p className="text-slate-500 font-medium text-lg flex items-center gap-2">
-              Process salaries, automated commissions, and strict tax deductions.
+             Process salaries, automated commissions, and strict tax deductions.
           </p>
         </div>
         

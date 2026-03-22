@@ -1,15 +1,16 @@
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import App from './App.tsx'
-import './index.css'
-// 1. Import the new TenantProvider
-import { TenantProvider } from './contexts/TenantContext'
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom'; 
+import App from './App';
+import { TenantProvider } from './contexts/TenantContext';
+import './index.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {/* 2. Wrap your entire app inside the Provider */}
-    <TenantProvider>
-      <App />
-    </TenantProvider>
-  </React.StrictMode>,
-)
+    <BrowserRouter> {/* 🌟 Router MUST wrap everything */}
+      <TenantProvider>
+        <App />
+      </TenantProvider>
+    </BrowserRouter>
+  </React.StrictMode>
+);

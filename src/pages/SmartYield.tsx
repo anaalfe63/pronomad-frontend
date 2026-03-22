@@ -33,11 +33,12 @@ interface SyncAction {
 }
 
 const SmartYield: React.FC = () => {
-  const { user } = useTenant();
+  // 🌟 FIX: Added `settings` to the destructuring!
+  const { user, settings } = useTenant();
   
-  // 🌟 DYNAMIC TENANT SETTINGS
-  const APP_COLOR = user?.themeColor || '#10b981'; 
-  const BASE_CURRENCY = user?.currency || 'GHS';
+  // 🌟 FIX: Pulled currency and color from `settings` instead of `user`
+  const APP_COLOR = settings?.theme_color || '#10b981'; 
+  const BASE_CURRENCY = settings?.currency || 'GHS';
 
   const [trips, setTrips] = useState<TripData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -460,9 +461,9 @@ const SmartYield: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-50">
                         {loading ? (
-                             <tr><td colSpan={4} className="p-8 text-center text-slate-400 font-bold">Loading Database...</td></tr>
+                              <tr><td colSpan={4} className="p-8 text-center text-slate-400 font-bold">Loading Database...</td></tr>
                         ) : trips.length === 0 ? (
-                             <tr><td colSpan={4} className="p-8 text-center text-slate-400 font-bold">No trips found in Operations. Create a trip to enable AI tracking.</td></tr>
+                              <tr><td colSpan={4} className="p-8 text-center text-slate-400 font-bold">No trips found in Operations. Create a trip to enable AI tracking.</td></tr>
                         ) : trips.map((trip) => {
                             const pendingSync = stagedUpdates.find(p => p.id === trip.id);
                             const fillRate = Math.round((trip.passengers / trip.capacity) * 100);

@@ -2,9 +2,9 @@ import React, { useState, FormEvent } from 'react';
 import { useTenant } from '../contexts/TenantContext'; 
 import { Lock, User, ArrowRight, Plane, MapPin, Compass, ShieldCheck, Eye, EyeOff } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-
-import bgImage from '../assets/images/login-bg.jpg';
-import sideImage from '../assets/images/side-panel.jpg';
+import { supabase } from '../lib/supabase';
+// 🌟 1. IMPORT THE AUDIT LOGGER
+import { logAudit } from '../lib/auditLogger';
 
 const Login: React.FC = () => {
   const { login } = useTenant(); 
@@ -21,15 +21,36 @@ const Login: React.FC = () => {
     setError('');
     setIsLoggingIn(true);
 
-    // 🟢 PURE SECURITY: No backdoors. No hardcoded passwords. 
-    // It only queries the Supabase database.
     try {
+        // 1. Authenticate the user
         await login({
             loginName: formData.username.trim(),
             loginPin: formData.password
         });
         
-        // 🟢 THE FIX: Force the old TenantContext to wake up and read the new tokens
+        // 🚨 2. AUDIT LOG: SUCCESSFUL LOGIN
+        try {
+            // Fetch the user's details quickly before the redirect
+            const { data: staffData } = await supabase
+              .from('staff')
+              .select('subscriber_id, name, username, role')
+              .eq('username', formData.username.trim())
+              .single();
+
+            if (staffData) {
+                await logAudit(
+                  staffData.subscriber_id,
+                  staffData.name || staffData.username,
+                  staffData.role,
+                  'System Login',
+                  'User successfully authenticated and accessed the workspace.'
+                );
+            }
+        } catch (auditErr) {
+            console.error('Failed to write login audit log', auditErr);
+        }
+        
+        // 3. Enter the application
         window.location.href = '/'; 
     } catch (err: any) {
         setError(err.message || 'Invalid credentials');
@@ -41,13 +62,10 @@ const Login: React.FC = () => {
     <div className="min-h-screen flex items-center justify-center relative overflow-hidden">
       
       {/* ================= BACKGROUND LAYER ================= */}
+      {/* 🌟 FIX: Use standard CSS backgroundImage syntax pointing to the public folder */}
       <div 
-        className="absolute inset-0 z-0"
-        style={{ 
-            backgroundImage: `url(${bgImage})`, 
-            backgroundSize: 'cover', 
-            backgroundPosition: 'center' 
-        }}
+        className="absolute inset-0 z-0 bg-cover bg-center"
+        style={{ backgroundImage: 'url("/login-bg.jpg")' }}
       ></div>
       
       <div className="absolute inset-0 z-0 bg-gradient-to-br from-teal-900/70 via-teal-800/60 to-blue-900/10 backdrop-blur-[0px]"></div>
@@ -56,8 +74,12 @@ const Login: React.FC = () => {
       <div className="bg-white/95 backdrop-blur-xl w-full max-w-5xl h-auto md:h-[600px] rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col md:flex-row relative z-10 m-4 border border-white/20 animate-in fade-in zoom-in-95 duration-500">
         
         {/* --- LEFT SIDE: BRAND & TRAVEL VIBE --- */}
-        <div className="md:w-1/2 bg-cover bg-center relative p-12 text-white flex flex-col justify-between overflow-hidden group"
-             style={{ backgroundImage: `url(${sideImage})` }}>
+        {/* 🌟 FIX: Replaced undefined variable with the public folder path. 
+            Change "side-image.jpg" to whatever your image is actually named! */}
+        <div 
+          className="md:w-1/2 bg-cover bg-center relative p-12 text-white flex flex-col justify-between overflow-hidden group"
+          style={{ backgroundImage: 'url("/side-panel.jpg")' }}
+        >
           
           <div className="absolute inset-0 bg-gradient-to-t from-teal-900/90 via-transparent to-teal-900/40 group-hover:scale-105 transition-transform duration-1000"></div>
           
@@ -102,7 +124,7 @@ const Login: React.FC = () => {
             <p className="text-slate-500 font-medium">Enter your credentials to access the workspace.</p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-5 relative z-10">
             
             {/* Username Input */}
             <div className="group">
@@ -167,8 +189,7 @@ const Login: React.FC = () => {
 
       </div>
       
-      {/* 🟢 Removed all hints of Dev Access */}
-      <div className="absolute bottom-4 text-white/20 text-[10px] font-mono">
+      <div className="absolute bottom-4 text-white/20 text-[10px] font-mono pointer-events-none">
         Photography by @ato_aikins | ProApps Connected
       </div>
     </div>

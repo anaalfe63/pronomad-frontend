@@ -7,6 +7,8 @@ import {
 // 🟢 Swapped Auth Engine
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
+// 🌟 1. IMPORT THE AUDIT LOGGER
+import { logAudit } from '../lib/auditLogger';
 
 // OFFLINE SYNC TYPE
 interface SyncAction {
@@ -187,9 +189,31 @@ const SupplierPortal = () => {
         if (isEditing) {
             const res = await supabase.from('suppliers').update(payload).eq('id', currentSupplier.id);
             error = res.error;
+            
+            // 🚨 AUDIT LOG: SUPPLIER EDITED
+            if (user?.subscriberId) {
+                await logAudit(
+                    user.subscriberId, 
+                    user.fullName || user.username || 'System', 
+                    user.role, 
+                    'Updated Supplier Profile', 
+                    `Modified details for vendor: ${payload.name}.`
+                );
+            }
         } else {
             const res = await supabase.from('suppliers').insert([payload]);
             error = res.error;
+            
+            // 🚨 AUDIT LOG: SUPPLIER CREATED
+            if (user?.subscriberId) {
+                await logAudit(
+                    user.subscriberId, 
+                    user.fullName || user.username || 'System', 
+                    user.role, 
+                    'Added New Supplier', 
+                    `Onboarded new partner: ${payload.name} (${payload.type}).`
+                );
+            }
         }
 
         if (error) throw error;
@@ -212,6 +236,8 @@ const SupplierPortal = () => {
   const handleDelete = async (id: string | number) => {
     if (window.confirm("Are you sure you want to remove this supplier?")) {
       
+      const supplierToDelete = suppliers.find(s => s.id === id);
+
       // Optimistic UI
       setSuppliers(prev => prev.filter(sup => sup.id !== id));
 
@@ -219,6 +245,17 @@ const SupplierPortal = () => {
           if (!navigator.onLine) throw new Error("Offline");
           const { error } = await supabase.from('suppliers').delete().eq('id', id);
           if (error) throw error;
+          
+          // 🚨 AUDIT LOG: SUPPLIER DELETED
+          if (user?.subscriberId && supplierToDelete) {
+              await logAudit(
+                  user.subscriberId, 
+                  user.fullName || user.username || 'System', 
+                  user.role, 
+                  'Deleted Supplier', 
+                  `Removed vendor from directory: ${supplierToDelete.name}.`
+              );
+          }
       } catch (e) {
           setPendingSyncs(prev => [...prev, {
               id: Date.now(),

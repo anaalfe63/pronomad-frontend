@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
+import { logAudit } from '../lib/auditLogger';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
 import { 
@@ -47,11 +48,13 @@ const safeJSON = (data: any) => {
 };
 
 const StaffManagement: React.FC = () => {
-  const { user } = useTenant(); 
+  // 🌟 FIX 1: Pull 'settings' out of useTenant
+  const { user, settings } = useTenant(); 
   const location = useLocation(); 
   
-  const APP_COLOR = user?.themeColor || '#10b981'; 
-  const BASE_CURRENCY = user?.currency || 'GHS';
+  // 🌟 FIX 2: Use 'settings' for theme and currency
+  const APP_COLOR = settings?.theme_color || '#10b981'; 
+  const BASE_CURRENCY = settings?.currency || 'GHS';
   const companyPrefix = (user as any)?.prefix || 'PND';
 
   const [staffList, setStaffList] = useState<Staff[]>([]); 
@@ -154,7 +157,6 @@ const StaffManagement: React.FC = () => {
           const pay = safeJSON(s.payroll_data);
 
           return {
-            // 🌟 FIXED: Using the real `username` column
             id: s.username || `USER-${s.id}`, dbId: s.id, name: s.name, role: s.role, 
             status: s.status || 'Active', availability: s.status === 'Active' ? 'Available' : 'Offline', 
             phone: s.phone || '', email: s.email || '', gender: s.gender || '', nationality: s.nationality || '', address: s.address || '', dob: s.dob || '',
@@ -202,7 +204,6 @@ const StaffManagement: React.FC = () => {
   const checkUsernameAvailability = async (usernameToCheck: string): Promise<boolean> => {
     setIsCheckingUsername(true);
     try {
-        // 🌟 FIXED: Checking the real `username` column
         const { data, error } = await supabase.from('staff').select('username').eq('username', usernameToCheck);
         setIsCheckingUsername(false);
         if (error) throw error;
@@ -218,7 +219,11 @@ const StaffManagement: React.FC = () => {
   };
 
   const handleActionClick = async (e: React.MouseEvent, staff: Staff, action: string) => {
-    e.stopPropagation(); setOpenMenuId(null);
+    e.stopPropagation(); 
+    setOpenMenuId(null);
+    
+    // 🌟 FIX 3: Null check for user to satisfy TypeScript
+    if (!user) return; 
     
     if (action === 'edit') {
         setEditingStaff(staff);
@@ -235,6 +240,7 @@ const StaffManagement: React.FC = () => {
           setStaffList(prev => prev.map(s => s.dbId === staff.dbId ? { ...s, status: newStatus } : s));
           try {
               await supabase.from('staff').update({ status: newStatus }).eq('id', staff.dbId);
+              
           } catch(e) {}
       }
     }
@@ -243,6 +249,13 @@ const StaffManagement: React.FC = () => {
           setStaffList(prev => prev.filter(s => s.dbId !== staff.dbId));
           try {
               await supabase.from('staff').delete().eq('id', staff.dbId);
+              await logAudit(
+                 user.subscriberId, 
+                 user.fullName || user.username, 
+                 user.role, 
+                 'Deleted Staff Member', 
+                 `Permanently removed ${staff.name} (${staff.role}) from the system.`
+              );
           } catch(e) {}
       }
     }
@@ -288,7 +301,6 @@ const StaffManagement: React.FC = () => {
           if (!isAvailable) { setUsernameError(`The username "${newUsername}" is already taken.`); return; }
       }
       
-      // 🌟 FIXED: Using real `username` and `password`
       const payload: any = { username: newUsername };
       if (newPassword) payload.password = newPassword;
 
@@ -316,7 +328,6 @@ const StaffManagement: React.FC = () => {
     if (!user?.subscriberId) return;
     setIsSubmitting(true);
     
-    // 🌟 FIXED: Using real `username` and `password`
     const payload = {
         subscriber_id: user.subscriberId,
         name: newStaff.name,

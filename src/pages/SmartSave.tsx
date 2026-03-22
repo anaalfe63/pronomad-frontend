@@ -610,9 +610,9 @@ const SmartSave: React.FC = () => {
               <button onClick={() => setIsNewPlanModalOpen(false)} className="p-2 bg-white rounded-full text-slate-400 hover:text-red-500 border border-slate-200 shadow-sm"><X size={20} /></button>
             </div>
 
-            <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
+            <div className="flex flex-col lg:flex-row  flex-1 overflow-auto">
                 {/* LEFT SIDE: FULL BOOKING FORM */}
-                <div className="lg:w-[60%] p-8 overflow-y-auto border-r border-slate-100 space-y-8">
+                <div className="lg:w-[60%] min-h-[60vh] p-8 overflow-y-auto border-r border-slate-100 space-y-8">
                     
                     {/* 1. Trip & Group Size */}
                     <div>

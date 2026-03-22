@@ -5,6 +5,8 @@ import { Receipt, CheckCircle, XCircle, Clock, Plus, DollarSign,
 // 🟢 Swapped Auth Engine
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../lib/supabase';
+// 🌟 1. IMPORT THE AUDIT LOGGER
+import { logAudit } from '../lib/auditLogger';
 
 // --- TYPES & INTERFACES ---
 
@@ -210,6 +212,18 @@ const Expenses: React.FC = () => {
         if (!navigator.onLine) throw new Error("Offline");
         const { error } = await supabase.from('expenses').insert([payload]);
         if (error) throw error;
+        
+        // 🚨 2. AUDIT LOG: EXPENSE SUBMITTED
+        if (user?.subscriberId) {
+            await logAudit(
+                user.subscriberId, 
+                user.fullName || user.username || 'System', 
+                user.role, 
+                'Submitted Expense Claim', 
+                `Requested ${payload.currency} ${payload.amount.toLocaleString()} for "${payload.description}". Paid via: ${payload.paid_by}.`
+            );
+        }
+
         fetchExpenses(); 
     } catch (error) {
         setPendingSyncs(prev => [...prev, {
@@ -245,6 +259,18 @@ const Expenses: React.FC = () => {
       if (!navigator.onLine) throw new Error("Offline");
       const { error } = await supabase.from('expenses').update(payload).eq('id', selectedExpense.id);
       if (error) throw error;
+
+      // 🚨 3. AUDIT LOG: FINANCE DECISION
+      if (user?.subscriberId) {
+          await logAudit(
+              user.subscriberId, 
+              user.fullName || user.username || 'System', 
+              user.role, 
+              `${actionStatus} Expense Claim`, 
+              `Marked expense ID ${String(selectedExpense.id).slice(0,8)} as ${actionStatus}. Amount: ${selectedExpense.currency} ${Number(selectedExpense.amount).toLocaleString()}. Note: ${payload.finance_note || 'None'}`
+          );
+      }
+
     } catch (error) {
       setPendingSyncs(prev => [...prev, {
           id: Date.now(),
@@ -262,6 +288,9 @@ const Expenses: React.FC = () => {
   const reimbursementLiability = expenses
     .filter(e => e.status === 'Pending' && e.paidBy === 'Employee (Out of pocket)')
     .reduce((sum, e) => sum + Number(e.amount), 0);
+
+  // 🌟 FALLBACK COLOR FOR UI
+  const APP_COLOR = '#0d9488'; // Teal
 
   return (
     <div className="animate-fade-in pb-20 relative">
@@ -282,7 +311,7 @@ const Expenses: React.FC = () => {
                </div>
           )}
         </div>
-        <button onClick={() => setIsSubmitModalOpen(true)} className="bg-teal-600 text-white px-5 py-3 rounded-xl font-bold shadow-lg flex items-center gap-2 hover:bg-teal-500 transition-all shrink-0 active:scale-95">
+        <button onClick={() => setIsSubmitModalOpen(true)} className="text-white px-5 py-3 rounded-xl font-bold shadow-lg flex items-center gap-2 transition-all shrink-0 active:scale-95" style={{ backgroundColor: APP_COLOR, boxShadow: `0 4px 14px -2px ${APP_COLOR}40` }}>
           <Plus size={18}/> Submit Request
         </button>
       </div>
@@ -313,7 +342,7 @@ const Expenses: React.FC = () => {
       {/* TABS */}
       <div className="flex gap-4 mb-6 border-b border-slate-200 pb-4 overflow-x-auto">
         {['pending', 'approved', 'rejected', 'all'].map((tab) => (
-          <button key={tab} onClick={() => setActiveTab(tab)} className={`font-bold pb-2 border-b-2 transition-all capitalize whitespace-nowrap ${activeTab === tab ? 'border-teal-600 text-teal-700' : 'border-transparent text-slate-400 hover:text-teal-500'}`}>
+          <button key={tab} onClick={() => setActiveTab(tab)} className={`font-bold pb-2 border-b-2 transition-all capitalize whitespace-nowrap ${activeTab === tab ? 'border-teal-600 text-teal-700' : 'border-transparent text-slate-400 hover:text-teal-500'}`} style={activeTab === tab ? { borderColor: APP_COLOR, color: APP_COLOR } : {}}>
             {tab} Expenses
           </button>
         ))}
@@ -358,7 +387,7 @@ const Expenses: React.FC = () => {
                       <span className="text-xs font-bold text-slate-500 flex items-center gap-1 mb-1"><Building2 size={12}/> Paid via Company</span>
                     )}
                     {exp.receiptRef ? (
-                      <p className="text-xs text-teal-600 font-bold flex items-center gap-1"><Paperclip size={12}/> {exp.receiptRef}</p>
+                      <p className="text-xs text-teal-600 font-bold flex items-center gap-1" style={{ color: APP_COLOR }}><Paperclip size={12}/> {exp.receiptRef}</p>
                     ) : (
                       <p className="text-[10px] text-red-400 font-bold flex items-center gap-1 uppercase"><AlertCircle size={10}/> No Receipt</p>
                     )}
@@ -391,7 +420,7 @@ const Expenses: React.FC = () => {
                   
                   {/* Actions */}
                   <td className="p-6 text-center">
-                    {exp.status === 'Pending' && (user?.role === 'CEO' || user?.role === 'owner' || user?.role === 'Finance') ? (
+                    {exp.status === 'Pending' && (user?.role === 'CEO' || user?.role === 'owner' || user?.role === 'Finance' || user?.role === 'PROADMIN') ? (
                       <button onClick={() => openActionDesk(exp)} className="px-4 py-2 bg-slate-900 text-white hover:bg-slate-800 text-xs font-bold rounded-xl transition-all shadow-md">Review</button>
                     ) : (
                       <span className="text-xs font-bold text-slate-300 uppercase tracking-widest">Locked</span>
@@ -413,7 +442,7 @@ const Expenses: React.FC = () => {
             <div className="bg-slate-50 border-b border-slate-100 p-6 flex justify-between items-center shrink-0">
               <div>
                 <h2 className="text-xl font-black text-slate-800">Submit Expense Report</h2>
-                <p className="text-xs font-bold text-teal-600 uppercase tracking-widest mt-1">Proof of Purchase</p>
+                <p className="text-xs font-bold uppercase tracking-widest mt-1" style={{ color: APP_COLOR }}>Proof of Purchase</p>
               </div>
               <button onClick={() => setIsSubmitModalOpen(false)} className="p-2 bg-white rounded-full text-slate-400 hover:text-red-500 border border-slate-200"><X size={20} /></button>
             </div>
@@ -423,17 +452,17 @@ const Expenses: React.FC = () => {
                 <h3 className="text-sm font-bold text-slate-800 border-b pb-2 mb-4">What was purchased?</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
-                    <input type="text" value={newExpense.title} onChange={e => setNewExpense({...newExpense, title: e.target.value})} placeholder="e.g. Emergency Bus Repair, Toll Fees..." className="w-full bg-slate-50 border p-3 rounded-xl font-bold outline-none"/>
+                    <input type="text" value={newExpense.title} onChange={e => setNewExpense({...newExpense, title: e.target.value})} placeholder="e.g. Emergency Bus Repair, Toll Fees..." className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl font-bold outline-none focus:ring-2" style={{ '--tw-ring-color': APP_COLOR } as any}/>
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Category</label>
-                    <select value={newExpense.category} onChange={e => setNewExpense({...newExpense, category: e.target.value})} className="w-full bg-slate-50 border p-3 rounded-xl outline-none font-bold text-slate-600">
+                    <select value={newExpense.category} onChange={e => setNewExpense({...newExpense, category: e.target.value})} className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl outline-none font-bold text-slate-600 focus:ring-2" style={{ '--tw-ring-color': APP_COLOR } as any}>
                       <option>Operational / Field</option><option>Transport / Fuel</option><option>Accommodation</option><option>Meals / Guest Recovery</option>
                     </select>
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Receipt / Invoice Ref No.</label>
-                    <input type="text" value={newExpense.receiptRef} onChange={e => setNewExpense({...newExpense, receiptRef: e.target.value})} placeholder="INV-2044" className="w-full bg-slate-50 border p-3 rounded-xl outline-none"/>
+                    <input type="text" value={newExpense.receiptRef} onChange={e => setNewExpense({...newExpense, receiptRef: e.target.value})} placeholder="INV-2044" className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl outline-none focus:ring-2" style={{ '--tw-ring-color': APP_COLOR } as any}/>
                   </div>
                 </div>
               </div>
@@ -443,20 +472,20 @@ const Expenses: React.FC = () => {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <label className="text-[10px] font-bold text-orange-600 uppercase ml-2 block mb-1">Currency</label>
-                    <select value={newExpense.currency} onChange={e => setNewExpense({...newExpense, currency: e.target.value})} className="w-full bg-white border border-orange-200 p-3 rounded-xl outline-none font-black text-slate-800">
+                    <select value={newExpense.currency} onChange={e => setNewExpense({...newExpense, currency: e.target.value})} className="w-full bg-white border border-orange-200 p-3 rounded-xl outline-none font-black text-slate-800 focus:ring-2 ring-orange-500/20">
                       <option>GHS</option><option>USD</option><option>EUR</option>
                     </select>
                   </div>
                   <div className="md:col-span-2">
                     <label className="text-[10px] font-bold text-orange-600 uppercase ml-2 block mb-1">Total Amount</label>
-                    <input type="number" value={newExpense.amount} onChange={e => setNewExpense({...newExpense, amount: e.target.value})} placeholder="0.00" className="w-full bg-white border border-orange-200 p-3 rounded-xl outline-none font-black text-xl text-slate-800"/>
+                    <input type="number" value={newExpense.amount} onChange={e => setNewExpense({...newExpense, amount: e.target.value})} placeholder="0.00" className="w-full bg-white border border-orange-200 p-3 rounded-xl outline-none font-black text-xl text-slate-800 focus:ring-2 ring-orange-500/20"/>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
                   <div>
                     <label className="text-[10px] font-bold text-orange-600 uppercase ml-2 block mb-1">Who paid for this?</label>
-                    <select value={newExpense.paidBy} onChange={e => setNewExpense({...newExpense, paidBy: e.target.value})} className="w-full bg-white border border-orange-200 p-3 rounded-xl outline-none font-bold text-slate-700">
+                    <select value={newExpense.paidBy} onChange={e => setNewExpense({...newExpense, paidBy: e.target.value})} className="w-full bg-white border border-orange-200 p-3 rounded-xl outline-none font-bold text-slate-700 focus:ring-2 ring-orange-500/20">
                       <option>Company Account</option>
                       <option>Employee (Out of pocket)</option>
                     </select>
@@ -464,7 +493,7 @@ const Expenses: React.FC = () => {
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-orange-600 uppercase ml-2 block mb-1">Payment Method Used</label>
-                    <select value={newExpense.paymentMethod} onChange={e => setNewExpense({...newExpense, paymentMethod: e.target.value})} className="w-full bg-white border border-orange-200 p-3 rounded-xl outline-none text-sm font-medium">
+                    <select value={newExpense.paymentMethod} onChange={e => setNewExpense({...newExpense, paymentMethod: e.target.value})} className="w-full bg-white border border-orange-200 p-3 rounded-xl outline-none text-sm font-medium focus:ring-2 ring-orange-500/20">
                       <option>MoMo</option><option>Cash / Petty Cash</option><option>Corporate Card</option><option>Bank Transfer</option>
                     </select>
                   </div>
@@ -473,7 +502,7 @@ const Expenses: React.FC = () => {
             </div>
 
             <div className="p-6 border-t border-slate-100 bg-slate-50 shrink-0">
-              <button onClick={handleSubmitExpense} className="w-full py-4 rounded-2xl font-bold shadow-lg bg-teal-600 hover:bg-teal-500 text-white flex justify-center items-center gap-2 transition-all">
+              <button onClick={handleSubmitExpense} className="w-full py-4 rounded-2xl font-bold shadow-lg text-white flex justify-center items-center gap-2 transition-all hover:brightness-110 active:scale-95" style={{ backgroundColor: APP_COLOR, boxShadow: `0 4px 14px -2px ${APP_COLOR}40` }}>
                 <FileText size={18}/> Send to Finance
               </button>
             </div>
@@ -514,16 +543,16 @@ const Expenses: React.FC = () => {
 
               <div>
                 <label className="text-[10px] font-bold text-slate-400 uppercase ml-2 block mb-1">Dispute / Rejection Reason (Required for Reject)</label>
-                <input type="text" value={rejectionNote} onChange={e => setRejectionNote(e.target.value)} placeholder="e.g. Missing receipt, amount too high..." className="w-full border-2 border-slate-200 focus:border-red-400 p-3 rounded-xl outline-none text-sm font-medium"/>
+                <input type="text" value={rejectionNote} onChange={e => setRejectionNote(e.target.value)} placeholder="e.g. Missing receipt, amount too high..." className="w-full bg-white border border-slate-200 focus:border-red-400 p-3 rounded-xl outline-none text-sm font-medium transition-colors"/>
               </div>
 
             </div>
 
             <div className="p-6 bg-white border-t border-slate-100 flex flex-col gap-3">
-              <button onClick={() => processExpense('Approved')} className="w-full py-4 rounded-2xl font-bold shadow-lg bg-green-500 hover:bg-green-600 text-white flex justify-center items-center gap-2">
+              <button onClick={() => processExpense('Approved')} className="w-full py-4 rounded-2xl font-bold shadow-lg bg-green-500 hover:bg-green-600 text-white flex justify-center items-center gap-2 active:scale-95 transition-all">
                 <CheckCircle size={18}/> Approve & Add to Ledger
               </button>
-              <button onClick={() => processExpense('Rejected')} className="w-full py-3 rounded-2xl font-bold bg-red-50 text-red-600 hover:bg-red-100 flex justify-center items-center gap-2">
+              <button onClick={() => processExpense('Rejected')} className="w-full py-3 rounded-2xl font-bold bg-red-50 text-red-600 hover:bg-red-100 flex justify-center items-center gap-2 transition-colors">
                 <XCircle size={18}/> Reject Request
               </button>
             </div>
